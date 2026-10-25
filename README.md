@@ -2,7 +2,7 @@
 
 
 
-# Serein
+## Serein
 
 <p align="center">
   <a href="https://github.com/ViceVerse-cz/Serein">
