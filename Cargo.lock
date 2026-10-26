@@ -6391,6 +6391,7 @@ dependencies = [
  "ui",
  "url",
  "winit",
+ "wl-clipboard-rs",
  "zeroize",
  "zip",
 ]

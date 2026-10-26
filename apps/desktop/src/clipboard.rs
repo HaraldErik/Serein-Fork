@@ -93,7 +93,9 @@ fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 			// egui already transferred text/image clipboard data through the focused
 			// Wayland surface. Do not make that data depend on arboard's headless
 			// data-control backend, which may be unavailable in a sandbox.
-			return supplied_content(request).ok_or("Clipboard unavailable")?;
+			return supplied_content(request)
+				.or_else(|| other_image().map(png_image))
+				.ok_or("Clipboard unavailable")?;
 		}
 	};
 	match clipboard.get().file_list() {
@@ -124,6 +126,9 @@ fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 	if let Ok(image) = clipboard.get_image() {
 		return png(&image.bytes, image.width, image.height);
 	}
+	if let Some(image) = other_image() {
+		return png_image(image);
+	}
 	if let Some(text) = request.text.or_else(|| clipboard.get_text().ok()) {
 		return supplied_text(text);
 	}
@@ -131,6 +136,51 @@ fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 		.get_image()
 		.map_err(|_| "Copy a file, image, or text before pasting")?;
 	png(&image.bytes, image.width, image.height)
+}
+
+const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// KDE and browsers often offer only `image/jpeg` or `image/webp`; arboard reads just PNG.
+#[cfg(target_os = "linux")]
+fn other_image() -> Option<image::RgbaImage> {
+	use std::io::Read;
+	use wl_clipboard_rs::paste::{
+		ClipboardType, MimeType, Seat, get_contents, get_mime_types_ordered,
+	};
+	let offered = get_mime_types_ordered(ClipboardType::Regular, Seat::Unspecified).ok()?;
+	let mime = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+		.into_iter()
+		.find(|mime| offered.iter().any(|offer| offer == mime))?;
+	let (pipe, _) = get_contents(
+		ClipboardType::Regular,
+		Seat::Unspecified,
+		MimeType::Specific(mime),
+	)
+	.ok()?;
+	let mut bytes = Vec::new();
+	pipe.take(MAX_CLIPBOARD_IMAGE_BYTES + 1)
+		.read_to_end(&mut bytes)
+		.ok()?;
+	if bytes.len() as u64 > MAX_CLIPBOARD_IMAGE_BYTES {
+		return None;
+	}
+	let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()?;
+	let mut limits = image::Limits::default();
+	limits.max_alloc = Some(64 * 1024 * 1024);
+	reader.limits(limits);
+	reader.decode().ok().map(|image| image.into_rgba8())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn other_image() -> Option<image::RgbaImage> {
+	None
+}
+
+fn png_image(image: image::RgbaImage) -> Result<Read, &'static str> {
+	let (width, height) = image.dimensions();
+	png(image.as_raw(), width as usize, height as usize)
 }
 
 fn supplied_content(request: ui::AttachmentPaste) -> Option<Result<Read, &'static str>> {
