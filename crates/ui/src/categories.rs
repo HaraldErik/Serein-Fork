@@ -2207,6 +2207,20 @@ mod tests {
 		));
 		// Forum containers never request history; opened posts remain keyboard-selectable.
 		state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+		// Since the forum sidebar rules, only joined threads are listed; pinning keeps this
+		// synthetic post listed without depending on the wall clock.
+		state.thread_info.insert(
+			Id(8),
+			model::threads::Info {
+				member: Some(model::threads::Member {
+					joined: 0,
+					muted: false,
+					mute_end: None,
+				}),
+				meta: None,
+				pinned: true,
+			},
+		);
 		state.revision += 1;
 		state.invalidate_navigation();
 		state
