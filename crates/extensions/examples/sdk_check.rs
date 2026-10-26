@@ -54,6 +54,31 @@ fn rebuilt(manifest: &str, path: &Path) -> Result<Package, Box<dyn std::error::E
 	})
 }
 
+fn check_link_badges(name: &str, package: &Package) {
+	package.validate().expect("badge package is valid");
+	let event = |content: &str| Invocation {
+		action: "message-event".into(),
+		message_event: Some(Box::new(MessageEvent {
+			kind: MessageEventKind::Create,
+			channel_id: "100".into(),
+			message_id: "200".into(),
+			author_id: Some("300".into()),
+			content: Some(content.into()),
+		})),
+		..Default::default()
+	};
+	let output = invoke(package, &event("see https://example.com")).expect("badge event succeeds");
+	let badges = &output.decoration.expect("link gets a decoration").badges;
+	assert_eq!(badges.len(), 1, "{name}: expected one badge");
+	assert_eq!(badges[0].text, "LINK");
+	let plain = invoke(package, &event("hello")).expect("plain event succeeds");
+	assert!(
+		plain.decoration.is_none(),
+		"{name}: plain text must stay undecorated"
+	);
+	println!("{name}: decorations validated in the host sandbox");
+}
+
 fn check_message_counter(name: &str, package: &Package) {
 	package.validate().expect("counter package is valid");
 	let mut input = Invocation {
@@ -571,6 +596,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
+	check_link_badges(
+		"link-badges/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/link-badges.serein-extension"
+		))?,
+	);
+	check_link_badges(
+		"link-badges/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/link-badges/manifest.json"),
+			&wasm_dir.join("link_badges.wasm"),
+		)?,
+	);
 	check_message_counter(
 		"message-counter/committed",
 		&parse_package(include_bytes!(
