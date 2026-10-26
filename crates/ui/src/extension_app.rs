@@ -1029,6 +1029,7 @@ mod tests {
 				kind: ExtensionKind::Plugin,
 				capabilities: vec![capability],
 				actions: vec![],
+				network_hosts: Vec::new(),
 			},
 			reviewed: false,
 			sha256: "a".repeat(64),

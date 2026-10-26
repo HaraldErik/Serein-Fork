@@ -102,6 +102,12 @@ pub enum Job {
 		account: String,
 		invocation: Invocation,
 	},
+	/// One pull-only HTTPS GET for a plugin with a `network` grant.
+	Fetch {
+		id: String,
+		account: String,
+		request: extensions::FetchRequest,
+	},
 	Logout {
 		account: String,
 	},
@@ -356,6 +362,10 @@ pub enum Event {
 		id: String,
 		output: Output,
 	},
+	Fetched {
+		id: String,
+		result: extensions::FetchResult,
+	},
 	LoggedOut,
 }
 
@@ -600,17 +610,26 @@ fn validate_job(job: &Job) -> Result<(), String> {
 			if !account.is_empty() {
 				account_key(account)?;
 			}
-			let event_bytes = if let Some(event) = &invocation.message_event {
+			let mut event_bytes = 0usize;
+			for event in invocation
+				.message_event
+				.as_deref()
+				.into_iter()
+				.chain(invocation.messages())
+			{
 				event.validate().map_err(|error| error.to_string())?;
-				event
-					.channel_id
-					.len()
+				event_bytes = event_bytes
+					.saturating_add(event.channel_id.len())
 					.saturating_add(event.message_id.len())
 					.saturating_add(event.author_id.as_ref().map_or(0, String::len))
-					.saturating_add(event.content.as_ref().map_or(0, String::len))
-			} else {
-				0
-			};
+					.saturating_add(event.content.as_ref().map_or(0, String::len));
+			}
+			if let Some(result) = &invocation.fetch_result {
+				result.validate().map_err(|error| error.to_string())?;
+				event_bytes = event_bytes
+					.saturating_add(result.body.as_ref().map_or(0, String::len))
+					.saturating_add(result.url.len());
+			}
 			if invocation.values.len() > 64
 				|| invocation
 					.action
@@ -639,6 +658,18 @@ fn validate_job(job: &Job) -> Result<(), String> {
 		Job::Preview { id, preview, .. } => {
 			valid_id(id)?;
 			preview.validate().map_err(|e| e.to_string())?;
+		}
+		Job::Fetch {
+			id,
+			account,
+			request,
+		} => {
+			valid_id(id)?;
+			account_key(account)?;
+			valid_id(&request.id)?;
+			if request.url.len() > extensions::MAX_FETCH_URL_BYTES {
+				return Err("Invalid plugin request".into());
+			}
 		}
 		Job::SelectTheme { id: Some(id) } | Job::Disable { id, .. } | Job::EditTheme { id, .. } => {
 			valid_id(id)?
@@ -821,9 +852,11 @@ fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 			if invocation.selected_message.is_some()
 				&& !stored.grants.contains(&Capability::SelectedMessage)
 				|| invocation.composer.is_some() && !stored.grants.contains(&Capability::Composer)
-				|| invocation.message_event.is_some()
+				|| (invocation.message_event.is_some() || invocation.messages.is_some())
 					&& !stored.grants.contains(&Capability::MessageEvents)
 				|| invocation.app_event.is_some() && !stored.grants.contains(&Capability::AppEvents)
+				|| invocation.fetch_result.is_some()
+					&& !stored.grants.contains(&Capability::Network)
 			{
 				return Err("Plugin access was not granted".into());
 			}
@@ -856,6 +889,14 @@ fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 			{
 				return Err("Rich presence access was not granted".into());
 			}
+			if (output.decoration.is_some() || !output.decorations.is_empty())
+				&& !stored.grants.contains(&Capability::Decorations)
+			{
+				return Err("Decoration access was not granted".into());
+			}
+			if output.fetch.is_some() && !stored.grants.contains(&Capability::Network) {
+				return Err("Network access was not granted".into());
+			}
 			if let Some(data) = output.storage.take() {
 				if !stored.grants.contains(&Capability::Storage) || data.len() > MAX_STORAGE {
 					return Err("Plugin data exceeds its granted storage budget".into());
@@ -863,6 +904,44 @@ fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 				atomic_write(&directory.join("data.json"), data.as_bytes(), gate)?;
 			}
 			Ok(Event::Invoked { id, output })
+		}
+		Job::Fetch {
+			id,
+			account,
+			request,
+		} => {
+			let directory = scope(root, ExtensionKind::Plugin, Some(&account))?.join(&id);
+			if directory.with_extension("disabled").exists() {
+				return Err("Plugin is disabled".into());
+			}
+			// Hosts and grants come from the installed package, never from the caller.
+			let stored = read_stored(&directory.join("package.json"))?;
+			if stored.package.manifest.id != id || !stored.grants.contains(&Capability::Network) {
+				return Err("Network access was not granted".into());
+			}
+			request
+				.validate(&stored.package.manifest)
+				.map_err(|_| "Plugin requested a host it does not list")?;
+			let result = match download_restricted(
+				&request.url,
+				extensions::MAX_FETCH_BYTES,
+				gate,
+				&stored.package.manifest.network_hosts,
+			) {
+				Ok(bytes) => extensions::FetchResult {
+					id: request.id,
+					url: request.url,
+					body: Some(String::from_utf8_lossy(&bytes).into_owned()),
+					error: None,
+				},
+				Err(error) => extensions::FetchResult {
+					id: request.id,
+					url: request.url,
+					body: None,
+					error: Some(error.chars().take(200).collect()),
+				},
+			};
+			Ok(Event::Fetched { id, result })
 		}
 		Job::Logout { account } => {
 			let directory = scope(root, ExtensionKind::Plugin, Some(&account))?;
@@ -1173,6 +1252,7 @@ fn load(
 								Vec::new()
 							},
 							actions: Vec::new(),
+							network_hosts: Vec::new(),
 						},
 						theme: None,
 						reviewed: false,
@@ -1540,6 +1620,29 @@ fn digest(bytes: &[u8]) -> String {
 	format!("{:x}", Sha256::digest(bytes))
 }
 
+/// Plugin `fetch`: like extension downloads, but every hop must stay on a listed host.
+fn download_restricted(
+	raw: &str,
+	limit: usize,
+	gate: &Gate,
+	hosts: &[String],
+) -> Result<Vec<u8>, String> {
+	tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+		.map_err(|_| "Plugin network is unavailable")?
+		.block_on(async {
+			tokio::select! {
+				biased;
+				_ = gate.wake_cancel.notified() => Err("Plugin request cancelled".into()),
+				result = tokio::time::timeout(
+					Duration::from_secs(15),
+					download_https(raw, limit, gate, Some(hosts)),
+				) => result.map_err(|_| "Plugin request timed out")?,
+			}
+		})
+}
+
 fn download(raw: &str, limit: usize, gate: &Gate, timeout: Duration) -> Result<Vec<u8>, String> {
 	tokio::runtime::Builder::new_current_thread()
 		.enable_all()
@@ -1549,16 +1652,24 @@ fn download(raw: &str, limit: usize, gate: &Gate, timeout: Duration) -> Result<V
 			tokio::select! {
 				biased;
 				_ = gate.wake_cancel.notified() => Err("Extension operation cancelled".into()),
-				result = tokio::time::timeout(timeout, download_https(raw, limit, gate)) => result.map_err(|_| "Extension download timed out")?,
+				result = tokio::time::timeout(timeout, download_https(raw, limit, gate, None)) => result.map_err(|_| "Extension download timed out")?,
 			}
 		})
 }
 
-async fn download_https(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>, String> {
+async fn download_https(
+	raw: &str,
+	limit: usize,
+	gate: &Gate,
+	hosts: Option<&[String]>,
+) -> Result<Vec<u8>, String> {
 	let mut url = url::Url::parse(raw).map_err(|_| "Invalid extension download URL")?;
 	for _ in 0..6 {
 		gate.check()?;
 		let host = url.host_str().ok_or("Invalid extension download host")?;
+		if hosts.is_some_and(|hosts| !extensions::allowed_url(url.as_str(), hosts)) {
+			return Err("The request left the plugin's listed hosts".into());
+		}
 		if url.scheme() != "https"
 			|| !url.username().is_empty()
 			|| url.password().is_some()
@@ -1584,9 +1695,14 @@ async fn download_https(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>,
 			.timeout(Duration::from_secs(30))
 			.build()
 			.map_err(|_| "Extension downloader unavailable")?;
-		let mut response = client
+		let mut request = client
 			.get(url.clone())
-			.header(reqwest::header::ACCEPT_ENCODING, "identity")
+			.header(reqwest::header::ACCEPT_ENCODING, "identity");
+		if hosts.is_some() {
+			// Many public APIs refuse requests without an agent; this one names no user or version.
+			request = request.header(reqwest::header::USER_AGENT, "Serein-Plugin");
+		}
+		let mut response = request
 			.send()
 			.await
 			.map_err(|_| "Extension download failed")?;
@@ -1714,6 +1830,7 @@ mod tests {
 				kind: ExtensionKind::Theme,
 				capabilities: Vec::new(),
 				actions: Vec::new(),
+				network_hosts: Vec::new(),
 			},
 			theme: Some(Theme::default()),
 			background_image: Vec::new(),
@@ -1747,6 +1864,81 @@ mod tests {
 				..Default::default()
 			},
 		}
+	}
+
+	#[test]
+	fn plugin_downloads_need_the_grant_and_a_listed_host_before_any_request() {
+		let profile = Profile::new();
+		let root = profile.0.join("extensions");
+		let base = extensions::parse_package(include_bytes!(
+			"../../../examples/extensions/packages/message-counter.serein-extension"
+		))
+		.unwrap();
+		let fetch = |id: &str, url: &str| Job::Fetch {
+			id: id.into(),
+			account: "account".into(),
+			request: extensions::FetchRequest {
+				id: "zones".into(),
+				url: url.into(),
+			},
+		};
+		let mut network = base.clone();
+		network.manifest.id = "fetcher".into();
+		network.manifest.capabilities = vec![Capability::Network];
+		network.manifest.network_hosts = vec!["api.example.com".into()];
+		network.manifest.actions = vec![
+			extensions::Action {
+				id: "go".into(),
+				label: "Go".into(),
+				surface: Surface::Panel,
+			},
+			extensions::Action {
+				id: "fetched".into(),
+				label: "Fetched".into(),
+				surface: Surface::FetchResult,
+			},
+		];
+		enable(
+			&root,
+			source(&profile, &network),
+			network.manifest.capabilities.clone(),
+			Some("account"),
+			&gate(),
+		)
+		.unwrap();
+		for url in [
+			"https://evil.example.com/zones",
+			"http://api.example.com/zones",
+			"https://api.example.com.evil.net/",
+		] {
+			let error = run(&root, fetch("fetcher", url), &gate()).err();
+			assert_eq!(
+				error.as_deref(),
+				Some("Plugin requested a host it does not list"),
+				"{url}"
+			);
+		}
+		// A plugin without the grant cannot download, even from a host another plugin lists.
+		let mut plain = base;
+		plain.manifest.id = "plain".into();
+		enable(
+			&root,
+			source(&profile, &plain),
+			plain.manifest.capabilities.clone(),
+			Some("account"),
+			&gate(),
+		)
+		.unwrap();
+		assert_eq!(
+			run(
+				&root,
+				fetch("plain", "https://api.example.com/zones"),
+				&gate()
+			)
+			.err()
+			.as_deref(),
+			Some("Network access was not granted")
+		);
 	}
 
 	#[test]

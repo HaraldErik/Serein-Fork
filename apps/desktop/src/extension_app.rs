@@ -1286,6 +1286,7 @@ mod tests {
 				label: "Show".into(),
 				surface: Surface::Panel,
 			}],
+			network_hosts: Vec::new(),
 		}
 	}
 

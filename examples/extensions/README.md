@@ -533,3 +533,7 @@ without exposing account data, credentials, calls, Gateway or media access.
 ## Slash command example
 
 [Fun Commands](fun-commands/src/lib.rs) shows the preview `command` surface: `/mock`, `/reverse` and `/upper` put their result in the draft for you to send.
+
+## Network example
+
+[GitHub Zen](github-zen/src/lib.rs) shows the preview `network` capability: its button asks Serein to download one short text from `api.github.com`, and the `fetch_result` action saves and shows it.

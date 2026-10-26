@@ -17,6 +17,9 @@ pub struct Manifest {
 	pub capabilities: Vec<Capability>,
 	#[serde(default)]
 	pub actions: Vec<Action>,
+	/// Hosts a `network` plugin may read with `fetch`, e.g. `api.example.com`.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub network_hosts: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +88,7 @@ pub enum Capability {
 	MessageDetails,
 	Relationships,
 	Decorations,
+	Network,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +104,7 @@ pub enum Surface {
 	BeforeSend,
 	Command,
 	Decorate,
+	FetchResult,
 }
 
 /// Declared entry point; its ID arrives in `Invocation::action`.

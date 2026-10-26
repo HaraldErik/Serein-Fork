@@ -1,0 +1,17 @@
+{
+  "api_version": 1,
+  "id": "github-zen",
+  "name": "GitHub Zen",
+  "version": "1.0.0",
+  "author": "Serein contributors",
+  "license": "MIT OR Apache-2.0",
+  "source": "https://github.com/HaraldErik/Serein-Fork/tree/main/examples/extensions/github-zen",
+  "kind": "plugin",
+  "capabilities": ["network", "storage"],
+  "network_hosts": ["api.github.com"],
+  "actions": [
+    {"id": "show", "label": "Show the last saying", "surface": "panel"},
+    {"id": "fetch", "label": "Get a new saying", "surface": "panel"},
+    {"id": "fetched", "label": "Receive a saying", "surface": "fetch_result"}
+  ]
+}

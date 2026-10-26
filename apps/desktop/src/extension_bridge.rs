@@ -111,6 +111,9 @@ fn parse_rgb_hex(text: &str) -> Option<[u8; 3]> {
 const MAX_MESSAGE_EVENTS: usize = 32;
 const MAX_MESSAGE_EVENT_BYTES: usize = 64 * 1024;
 const MESSAGE_EVENT_INTERVAL: Duration = Duration::from_millis(100);
+const FETCH_WINDOW: Duration = Duration::from_secs(60);
+const MAX_FETCHES_PER_WINDOW: usize = 10;
+const FETCH_STALE: Duration = Duration::from_secs(30);
 
 fn attach_app_data(
 	invocation: &mut Invocation,
@@ -128,6 +131,8 @@ fn attach_app_data(
 
 enum ReactiveEvent {
 	Message(MessageEvent),
+	/// A completed `fetch`, for the plugin's `fetch_result` action.
+	Fetched(extensions::FetchResult),
 	/// Already-loaded messages for a `decorate` action, newest first.
 	Decorate(Vec<MessageEvent>),
 	App(AppEventKind),
@@ -145,6 +150,7 @@ impl ReactiveEvent {
 	fn available(&self, state: &State) -> bool {
 		match self {
 			Self::Message(_) | Self::Decorate(_) => crate::extension_events::available(state),
+			Self::Fetched(_) => state.user.is_some(),
 			Self::App(_) | Self::ActionResult(_) => crate::extension_app::available(state),
 		}
 	}
@@ -165,6 +171,9 @@ impl QueuedEvent {
 				ReactiveEvent::ActionResult(result) => result.request_id.len(),
 				ReactiveEvent::Message(event) => event_bytes(event),
 				ReactiveEvent::Decorate(messages) => messages.iter().map(event_bytes).sum(),
+				ReactiveEvent::Fetched(result) => {
+					result.url.len() + result.body.as_ref().map_or(0, String::len)
+				}
 			}
 	}
 }
@@ -199,6 +208,11 @@ pub struct Bridge {
 	app_key: Option<crate::extension_app::ChangeKey>,
 	/// Last loaded-message batch offered to `decorate` plugins.
 	decorate_key: Option<u64>,
+	/// Plugins with a `fetch` in flight, and each plugin's recent request times.
+	fetching: BTreeMap<String, Instant>,
+	fetch_log: BTreeMap<String, VecDeque<Instant>>,
+	/// Plugins whose in-flight `fetch` came from a foreground action, so its result may show a panel.
+	foreground_fetch: BTreeSet<String>,
 	extended_key: Option<u64>,
 	app_context_changed: bool,
 	data_changes: crate::extension_data_events::Changes,
@@ -470,6 +484,62 @@ impl Bridge {
 			self.message_events.push_back(queued);
 		}
 	}
+	/// Reserves a `fetch` slot: one in flight and ten per minute for each plugin.
+	fn admit_fetch(&mut self, id: &str, now: Instant) -> bool {
+		let log = self.fetch_log.entry(id.to_owned()).or_default();
+		while log
+			.front()
+			.is_some_and(|at| now.duration_since(*at) > FETCH_WINDOW)
+		{
+			log.pop_front();
+		}
+		// A failed job never reports back; its slot frees after the worker's timeout.
+		self.fetching
+			.retain(|_, started| now.duration_since(*started) < FETCH_STALE);
+		if self.fetching.contains_key(id) || log.len() >= MAX_FETCHES_PER_WINDOW {
+			return false;
+		}
+		log.push_back(now);
+		self.fetching.insert(id.to_owned(), now);
+		true
+	}
+	/// Starts one plugin `fetch`, at most one in flight and ten per minute per plugin.
+	#[allow(clippy::too_many_arguments)]
+	fn request_fetch(
+		&mut self,
+		id: &str,
+		request: extensions::FetchRequest,
+		foreground: bool,
+		account: &Option<String>,
+		state: &State,
+		ctx: &egui::Context,
+		messaging: &mut ui::MessagingUi,
+	) {
+		let Some(account) = account.clone() else {
+			return;
+		};
+		if !self.admit_fetch(id, Instant::now()) {
+			messaging.extensions.status =
+				format!("{id} is downloading too often; a request was skipped.");
+			return;
+		}
+		if foreground {
+			self.foreground_fetch.insert(id.to_owned());
+		} else {
+			self.foreground_fetch.remove(id);
+		}
+		self.submit(
+			Job::Fetch {
+				id: id.to_owned(),
+				account,
+				request,
+			},
+			None,
+			state.generation,
+			ctx,
+			messaging,
+		);
+	}
 	/// Offers the selected conversation's loaded messages to `decorate` plugins whenever that
 	/// set changes (conversation switch, history page, edit, plugin enabled).
 	fn queue_decorate_batches(&mut self, state: &State) {
@@ -601,6 +671,8 @@ impl Bridge {
 	}
 	pub fn logout(&mut self, ctx: &egui::Context) -> Result<(), String> {
 		self.message_events.clear();
+		self.fetching.clear();
+		self.foreground_fetch.clear();
 		self.app_key = None;
 		self.app_context_changed = false;
 		self.data_changes = Default::default();
@@ -675,6 +747,9 @@ impl Bridge {
 		let scope = (state.generation, account.clone());
 		if self.scope.as_ref() != Some(&scope) {
 			self.message_events.clear();
+			self.fetching.clear();
+			self.fetch_log.clear();
+			self.foreground_fetch.clear();
 			self.app_key = None;
 			self.app_context_changed = false;
 			self.data_changes = Default::default();
@@ -1056,7 +1131,30 @@ impl Bridge {
 								.extensions
 								.apply_command_output(state, &context, replacement);
 						}
-						if surface == Some(Surface::Decorate) {
+						// A result answers a foreground request only once; a chained fetch keeps that.
+						let was_foreground = surface == Some(Surface::FetchResult)
+							&& self.foreground_fetch.remove(&id);
+						if let Some(request) = output.fetch.take() {
+							let foreground = was_foreground
+								|| matches!(
+									surface,
+									Some(
+										Surface::Panel
+											| Surface::Message | Surface::Composer
+											| Surface::Command
+									)
+								);
+							self.request_fetch(
+								&id, request, foreground, &account, state, ctx, messaging,
+							);
+						}
+						if surface == Some(Surface::FetchResult) {
+							if was_foreground && !output.panel.is_empty() {
+								messaging
+									.extensions
+									.present_output(id, invocation, context, output, state);
+							}
+						} else if surface == Some(Surface::Decorate) {
 							for item in &output.decorations {
 								messaging.extensions.decorate_message(
 									&id,
@@ -1100,6 +1198,50 @@ impl Bridge {
 					preview,
 				),
 				Ok(Event::ThemeExported) => messaging.extensions.status = "Theme exported.".into(),
+				Ok(Event::Fetched { id, result }) => {
+					self.fetching.remove(&id);
+					let action = self
+						.installed
+						.iter()
+						.filter(|entry| !self.disabled.contains(&entry.manifest.id))
+						.find(|entry| entry.manifest.id == id)
+						.and_then(|entry| {
+							entry
+								.manifest
+								.actions
+								.iter()
+								.find(|action| action.surface == Surface::FetchResult)
+						})
+						.map(|action| action.id.clone());
+					let queued = action.map(|action| QueuedEvent {
+						id: id.clone(),
+						action,
+						context: ExtensionContext::capture(state, false),
+						event: ReactiveEvent::Fetched(result),
+					});
+					match queued {
+						Some(queued)
+							if self.message_events.len() < MAX_MESSAGE_EVENTS
+								&& self
+									.message_events
+									.iter()
+									.map(QueuedEvent::bytes)
+									.sum::<usize>() + queued.bytes()
+									<= MAX_MESSAGE_EVENT_BYTES =>
+						{
+							self.message_events.push_back(queued)
+						}
+						Some(_) => {
+							self.foreground_fetch.remove(&id);
+							messaging.extensions.status =
+								"A plugin download finished while the event queue was full; it was dropped."
+									.into();
+						}
+						None => {
+							self.foreground_fetch.remove(&id);
+						}
+					}
+				}
 				Ok(Event::LoggedOut | Event::Preview { .. }) => {}
 			}
 		}
@@ -1520,6 +1662,9 @@ impl Bridge {
 						}
 						ReactiveEvent::Decorate(messages) => {
 							invocation.messages = Some(Box::new(messages))
+						}
+						ReactiveEvent::Fetched(result) => {
+							invocation.fetch_result = Some(Box::new(result))
 						}
 						ReactiveEvent::App(kind) => {
 							invocation.app_event = Some(kind);
@@ -2086,6 +2231,26 @@ mod tests {
 			.unwrap();
 		bridge.queue_decorate_batches(&state);
 		assert!(batch(&bridge).is_empty());
+	}
+
+	#[test]
+	fn plugin_downloads_are_one_at_a_time_and_rate_limited() {
+		let mut bridge = Bridge::default();
+		let start = Instant::now();
+		assert!(bridge.admit_fetch("a", start));
+		assert!(!bridge.admit_fetch("a", start), "one in flight per plugin");
+		assert!(bridge.admit_fetch("b", start), "plugins are independent");
+		// A job that never reported back stops blocking once it is stale.
+		assert!(!bridge.admit_fetch("b", start + Duration::from_secs(1)));
+		assert!(bridge.admit_fetch("b", start + FETCH_STALE + Duration::from_secs(1)));
+		// Completed requests free the slot but still count toward the window.
+		for second in 1..MAX_FETCHES_PER_WINDOW as u64 {
+			bridge.fetching.remove("a");
+			assert!(bridge.admit_fetch("a", start + Duration::from_secs(second)));
+		}
+		bridge.fetching.remove("a");
+		assert!(!bridge.admit_fetch("a", start + Duration::from_secs(20)));
+		assert!(bridge.admit_fetch("a", start + FETCH_WINDOW + Duration::from_secs(2)));
 	}
 
 	#[test]

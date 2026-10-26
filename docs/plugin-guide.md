@@ -34,7 +34,8 @@ call has hard limits.
 | Installed plugins | 64 per scope |
 | Decoration cache | 2,048 entries / 4 MiB, oldest evicted first |
 
-A plugin cannot read your token, open files, use the network or call Discord directly. Actions that
+A plugin cannot read your token, open files, open its own network connections or call Discord
+directly (the preview `network` capability lets Serein download from hosts the plugin lists). Actions that
 change something (send, edit, delete, react, join a call…) are **proposals** that wait for your
 click on **Apply**.
 
@@ -157,6 +158,7 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `composer` | You pick it from the composer **Tools** menu | `replacement` draft text |
 | `message_event` | A message is created, edited or deleted | `storage`, or a **decoration** |
 | `decorate` | Preview: the conversation's loaded messages change | per-message **decorations** |
+| `fetch_result` | Preview: a download this plugin asked for finished | `storage`, or a panel if a button started it |
 | `app_event` | Connection, navigation, voice, settings… change | `storage` |
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
@@ -294,6 +296,32 @@ pressing Enter runs the plugin with `action = "mock"` and `composer = "hello"`.
 Example: [`examples/extensions/fun-commands`](../examples/extensions/fun-commands/src/lib.rs)
 (`/mock`, `/reverse`, `/upper`).
 
+## Downloading data (preview, pull-only)
+
+With the `network` capability a plugin can ask Serein to download from the hosts it lists. Nothing is
+uploaded: there is no request body, no cookies and no credentials. The host sends a plain HTTPS GET.
+
+```json
+"capabilities": ["network", "storage"],
+"network_hosts": ["api.github.com"],
+"actions": [
+  {"id": "fetch", "label": "Get a new saying", "surface": "panel"},
+  {"id": "fetched", "label": "Receive a saying", "surface": "fetch_result"}
+]
+```
+
+1. Any action except `tick` and `before_send` returns `fetch: {"id": "zen", "url": "https://api.github.com/zen"}`
+   (SDK: `NetworkOutput`).
+2. Serein checks the URL against `network_hosts` (exact names, HTTPS, port 443), downloads at most
+   64 KiB within 15 seconds, and follows redirects only to listed hosts.
+3. Your `fetch_result` action receives `fetch_result` with `body` (UTF-8) or `error` (SDK:
+   `NetworkInvocation`). Save what you need with `storage`; other hooks (decorations, commands, send
+   hooks) can read it later. A panel is shown only if a button or command started the download.
+
+Limits: up to 8 hosts per plugin, one download in flight and 10 per minute per plugin. The consent
+screen lists the hosts. Those sites see your IP address and the URLs you build, so never put private
+data in a URL. Example: [`examples/extensions/github-zen`](../examples/extensions/github-zen/src/lib.rs).
+
 ## Publishing and sharing
 
 - Keep source and license public. Share the `.serein-extension` file, or add it to the catalog under
@@ -303,7 +331,7 @@ Example: [`examples/extensions/fun-commands`](../examples/extensions/fun-command
 
 ## What is planned
 
-Decorations, send hooks and slash commands are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
+Decorations, send hooks, slash commands and pull-only downloads are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
 items, settings pages), send hooks and commands, timers, storage with more keys, pull-only network
 access to hosts you approve, and limited auto-apply for low-risk actions. Plugins that depend on
 patching Discord's web client have no equivalent in a native client.
