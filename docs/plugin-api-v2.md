@@ -1,6 +1,6 @@
 # Plugin API v2 design (proposal)
 
-Status: **proposal, not implemented.** Goal: a plugin author can build what an Equicord
+Status: **proposal; the bounded decoration cache and its validation (`crates/extensions/src/decorations.rs`) exist, nothing else is wired yet.** Goal: a plugin author can build what an Equicord
 plugin does, as a native Wasm plugin written from scratch (Rust, C, C++ or anything that
 targets Wasm). Equicord plugins are not loaded or ported. Low RAM is the priority: the
 client should stay under 500 MB, with 600 MB acceptable and 700 MB+ a failure.
@@ -39,12 +39,17 @@ v1 plugins only answer a user action or app event with one JSON result. They can
 
 ## New capabilities
 
-- `auto_apply:<effect>`: user grants specific effects (for example `mark_read`,
-  `set_reaction`, `send_message`) to run without a click, per plugin, revocable. The default
-  stays "needs Apply". Rate-limited by the host.
-- `network:<host>`: host-performed HTTPS GET/POST to hosts named in the manifest and granted
-  by the user. No cookies or credentials, response capped (for example 256 KiB), timeout,
-  per-plugin request budget. Wasm receives bytes, never a socket.
+- `auto_apply:<effect>`: user grants specific low-risk effects (for example `mark_read`,
+  `set_reaction`, `copy_text`, `notice`) to run without a click, per plugin, revocable. The
+  default stays "needs Apply". Never available for deletion, moderation, role/server changes,
+  account edits or sending messages on its own. Rate-limited, and each auto-applied effect is
+  shown in a bounded in-app activity list.
+- `network:<host>`: **pull only.** Host-performed HTTPS `GET` to hosts named in the manifest
+  and granted by the user. No request body, cookies, credentials or custom auth headers; the
+  host never adds Discord data to a request. Response capped (for example 256 KiB), timeout,
+  per-plugin request budget. Wasm receives bytes, never a socket. Because a URL itself can
+  carry data, the consent screen lists the hosts and says plugin-chosen URL text goes to them.
+  There is no POST/PUT. Serein itself sends no analytics or telemetry; data collection stays zero.
 - `storage_v2`: key-value store with per-key and total quotas (replaces the single string).
 - `decorate_*` grants are separate for message, user and server data so consent stays specific.
 
@@ -99,8 +104,9 @@ Each phase ships with a SDK version bump, updated docs and synthetic tests (boun
 malformed output, consent checks). Existing v1 plugins keep working; the `api_version`
 field selects behaviour.
 
-## Decisions needed from the owner
+## Decisions (owner)
 
-- Are the "will not be supported" exclusions acceptable?
-- Is host-performed `network` acceptable, given the AGENTS rule of no telemetry/backend?
-- Should `auto_apply` exist at all, or should every state-changing effect keep a click?
+- Exclusions above accepted; FakeNitro and Quest auto-completers are not wanted.
+- Host-performed `network` is accepted as pull-only; sending data out is not.
+- `auto_apply` exists in the limited form above (maintainer's call).
+- The goal is an SDK others can build almost anything with, not bundled plugins.
