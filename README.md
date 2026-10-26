@@ -1,261 +1,177 @@
 # Serein-Fork
 
-
-
-## Serein
-
 <p align="center">
-  <a href="https://github.com/ViceVerse-cz/Serein">
-    <img src="docs/preview.png" alt="Serein Native Discord Client" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
-  </a>
+  <img src="docs/preview.png" alt="Serein Native Discord Client" width="900" style="max-width: 100%; height: auto; border-radius: 8px;" />
 </p>
 
 <p align="center">
-  <strong>A lightweight, native Discord desktop client written in Rust, powered by egui and wgpu.</strong>
+  <strong>A lightweight, native Discord desktop client written in Rust (egui + wgpu), with a sandboxed WebAssembly plugin system.</strong>
 </p>
 
-<h3 align="center">
-  <a href="https://discord.gg/UqTDGCENaN">💬 Join our Discord server for updates</a>
-</h3>
-
 <p align="center">
-  <a href="#downloads--installation"><strong>📦 Downloads</strong></a> &nbsp;•&nbsp;
+  <a href="#install"><strong>📦 Install</strong></a> &nbsp;•&nbsp;
+  <a href="#build-from-source"><strong>🛠️ Build</strong></a> &nbsp;•&nbsp;
+  <a href="#plugins"><strong>🧩 Plugins</strong></a> &nbsp;•&nbsp;
   <a href="#highlights"><strong>⚡ Highlights</strong></a> &nbsp;•&nbsp;
-  <a href="#feature-showcase"><strong>✨ Showcase</strong></a> &nbsp;•&nbsp;
-  <a href="#measured-performance-vs-official-discord"><strong>📊 Benchmarks</strong></a> &nbsp;•&nbsp;
-  <a href="#quick-start"><strong>🛠️ Quick Start</strong></a> &nbsp;•&nbsp;
   <a href="#feature-matrix"><strong>📋 Features</strong></a> &nbsp;•&nbsp;
-  <a href="#architecture-overview"><strong>🏗️ Architecture</strong></a>
+  <a href="#troubleshooting"><strong>🩺 Troubleshooting</strong></a>
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/UqTDGCENaN"><img src="https://img.shields.io/badge/Discord-Join%20our%20Discord%20server%20for%20updates-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://github.com/ViceVerse-cz/Serein/releases"><img src="https://img.shields.io/github/v/release/ViceVerse-cz/Serein?label=release&color=blue" alt="GitHub Release" /></a>
-  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
-  <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
-  <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg" alt="Platform Support" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License: MIT or Apache-2.0" /></a>
+  <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 pinned" /></a>
+  <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-informational.svg" alt="Platforms" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License" /></a>
 </p>
-
----
 
 > [!WARNING]
-> **Unofficial and not endorsed by Discord.**
-> Serein communicates directly with Discord's public gateway and REST endpoints for your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md) before use.
+> **Unofficial and not endorsed by Discord.** Serein talks to Discord's public gateway and REST endpoints
+> for your existing account. Automating normal accounts outside the official OAuth2/bot API violates
+> Discord's Terms of Service and risks account termination. Read the
+> [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md)
+> before use.
 
----
+## About this fork
 
-## Downloads & Installation
+Serein-Fork is a fork of [ViceVerse-cz/Serein](https://github.com/ViceVerse-cz/Serein) that adds:
 
-Pre-compiled releases for macOS, Linux, and Windows are published on GitHub [Releases](https://github.com/ViceVerse-cz/Serein/releases).
+- **A much more capable plugin system** (new `decorations` API; see [Plugins](#plugins) and the
+  [v2 roadmap](docs/plugin-api-v2.md)), and a higher installed-plugin limit (64, was 8).
+- **Automatic Linux packages** built on every code push: `.deb`, `.rpm`, Arch `.pkg.tar.zst`,
+  AppImage and Flatpak ([Install](#install)).
+- **An Arch source installer** that compiles on your machine and installs through `pacman`.
+- **Wayland image paste** for JPEG/WebP/GIF clipboard images (KDE Spectacle, browsers).
+- **Update checks that read this fork**, not upstream.
 
-| Platform | Format | Architectures | Details |
-|---|---|---|---|
-| **Windows** | `-Setup.exe`, `.zip` | `x86_64`, `aarch64` | Per-user NSIS installer (recommended) or standalone portable archive |
-| **macOS** | Homebrew Cask, `.zip`, Nix flake | Apple Silicon (`aarch64`) | Signed and notarized `.app` bundle; the Nix build is unsigned |
-| **Linux** | Flatpak (recommended), Repositories (`apt`, `dnf`, `zypper`, `pacman`), Gentoo ebuild, Nix flake, `.AppImage` | `x86_64` | Flatpak with automatic updates; signed package repositories; portable AppImage |
+Serein sends no telemetry. The upstream project's history and credits are preserved.
 
----
+## Install
 
-<details open>
-<summary><h3>🐧 Linux (Flatpak, Repositories, Gentoo, Nix, AppImage)</h3></summary>
-
-#### 1. Flatpak (Recommended)
-
-Flatpak is the recommended distribution format for Linux, featuring sandbox isolation, bundled GNOME/WebKit runtimes, and automatic background updates.
-
-- **One-Click Repository Install (Automatic Updates)**:
-  ```sh
-  flatpak install --user https://viceverse-cz.github.io/Serein/flatpak/serein.flatpakref
-  ```
-  Once installed, your desktop software store (GNOME Software, KDE Discover) or `flatpak update` will automatically discover and install updates.
-
-- **Standalone Offline Bundle**:
-  Download `Serein-linux.flatpak` from [Releases](https://github.com/ViceVerse-cz/Serein/releases):
-  ```sh
-  flatpak install --user ./Serein-linux.flatpak
-  flatpak run cz.viceverse.serein
-  ```
-
-See [Flatpak guide](packaging/flatpak/README.md) for sandbox permissions and source build details.
-
-#### 2. Native Package Repositories (apt, dnf, zypper, pacman)
-
-Configure the signed package repository for your distribution with one command:
-```sh
-curl -fsSL https://viceverse-cz.github.io/Serein/setup.sh | sh
-```
-The script detects your distribution (Ubuntu/Debian, Fedora, openSUSE, Arch Linux), cryptographically verifies the GPG signing key, and configures the repository with an option to install immediately.
-
-After setup, manage Serein with your native package manager:
-```sh
-# Ubuntu / Debian: sudo apt install serein
-# Fedora:          sudo dnf install serein
-# openSUSE:        sudo zypper install serein
-# Arch Linux:      sudo pacman -S serein
-```
-Your normal system updates (`apt upgrade`, `dnf upgrade`, `zypper update`, `pacman -Syu`) will keep Serein updated. See [Signed package repositories](packaging/repositories/README.md) for manual GPG verification steps.
-
-#### 3. Gentoo (source or binary)
-
-Gentoo users can install Serein from the [vitaly-zdanevich-overlay](https://github.com/vitaly-zdanevich/gentoo-overlay) overlay. It provides a source ebuild ([net-im/serein](https://github.com/vitaly-zdanevich/gentoo-overlay/tree/main/net-im/serein)) and a prebuilt amd64 ebuild ([net-im/serein-bin](https://github.com/vitaly-zdanevich/gentoo-overlay/tree/main/net-im/serein-bin)).
+### Arch Linux, CachyOS, EndeavourOS, Manjaro (build on your machine)
 
 ```sh
-sudo eselect repository add vitaly-zdanevich-overlay git https://github.com/vitaly-zdanevich/gentoo-overlay.git
-sudo emaint sync -r vitaly-zdanevich-overlay
-echo 'net-im/serein ~amd64' | sudo tee /etc/portage/package.accept_keywords/serein
-sudo emerge --ask net-im/serein
+git clone https://github.com/HaraldErik/Serein-Fork
+cd Serein-Fork
+bash packaging/arch/install.sh
 ```
 
-Use `net-im/serein-bin` in the keyword file and emerge command to install the prebuilt binary instead. The source ebuild requires Rust 1.98.1 or newer. The binary ebuild targets amd64 systems with glibc 2.43 or newer. The two ebuilds install the same files, so choose one.
+The script installs build dependencies with `pacman`, builds Serein with Cargo, installs the
+resulting package with `pacman -U` and refreshes desktop entries (including KDE's menu). Run it as your
+normal user. If you already have the `rust` package it is used; `rustup` is only installed when you have
+neither. Remove it later with `sudo pacman -R serein`. More in [`packaging/arch`](packaging/arch/README.md).
 
-#### 4. Nix (flake)
+### Prebuilt Linux packages (GitHub Actions)
 
-Nix installs are updated through Nix, not the in-app updater. On macOS the build produces an unsigned, non-notarized `Serein.app`. See the [Nix package guide](nix/README.md) for the development shell and details.
+Every push that changes code runs **Build Linux packages on push**.
 
-The repository flake builds Serein from source for `x86_64-linux` and `aarch64-darwin`:
+1. Open the repository's **Actions** tab, choose the latest successful run of that workflow.
+2. Download an artifact from **Artifacts** at the bottom (kept 14 days): names start with `serein-linux-`.
+3. Unzip it and install with your package manager:
 
 ```sh
-nix run github:ViceVerse-cz/Serein#serein
-nix profile install github:ViceVerse-cz/Serein#serein
+sudo apt install ./serein-*.deb                     # Ubuntu 26.04 (x86_64 or ARM64)
+sudo dnf install ./serein-*.fc43.*.rpm              # Fedora 43 (fc44 for Fedora 44)
+sudo zypper install ./serein-*.suse.*.rpm           # openSUSE Tumbleweed
+sudo pacman -U ./serein-*.pkg.tar.zst               # Arch
+flatpak install --user ./serein-*.flatpak           # Flatpak bundle
+chmod +x serein-*.AppImage && ./serein-*.AppImage   # AppImage (needs host GTK4/WebKitGTK 6)
 ```
 
-Or declaring it in the flake
+Use a directory containing only the one package you want. These packages are unsigned CI builds.
+Voice needs the GStreamer Good plugin set (`gst-plugins-good` on Arch); screen sharing needs a
+PipeWire-capable portal. Details: [`packaging/linux`](packaging/linux/README.md).
 
-Both modules below take `inputs` as an argument, so your flake must pass it through `specialArgs` (NixOS) and `extraSpecialArgs` (Home Manager). Without this, importing the modules fails with a missing `inputs` argument.
+### Windows and macOS
 
-`flake.nix`
-```nix
-{
-    inputs = {
-        nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-        home-manager = {
-            url = "github:nix-community/home-manager";
-            inputs.nixpkgs.follows = "nixpkgs";
-        };
-        serein = {
-            url = "github:ViceVerse-cz/Serein";
-            inputs.nixpkgs.follows = "nixpkgs";
-        };
-    };
+CI also produces unsigned `serein-<OS>-<arch>-unsigned` artifacts on pushes to `main`. Signed installers,
+Homebrew and similar channels belong to the upstream project's
+[releases](https://github.com/ViceVerse-cz/Serein/releases) and are not published by this fork.
 
-    outputs = { nixpkgs, home-manager, ... }@inputs: {
-        # NixOS
-        nixosConfigurations.hostname = nixpkgs.lib.nixosSystem {
-            system = "x86_64-linux";
-            specialArgs = { inherit inputs; };
-            modules = [ ./configuration.nix ];
-        };
+## Build from source
 
-        # Standalone Home Manager
-        homeConfigurations.username = home-manager.lib.homeManagerConfiguration {
-            pkgs = nixpkgs.legacyPackages.x86_64-linux;
-            extraSpecialArgs = { inherit inputs; };
-            modules = [ ./home-manager.nix ];
-        };
-    };
-}
-```
+Requirements: a C/C++ toolchain, CMake, `pkg-config` and, on Linux, the GTK 4 / WebKitGTK 6 development
+packages below. Rust **1.98.1** is pinned in [`rust-toolchain.toml`](rust-toolchain.toml); with `rustup`
+it is selected automatically (a newer system Rust may also work but is untested).
 
-If you use Home Manager as a NixOS module instead, pass `inputs` through its own option:
+| Distro | Install build dependencies |
+| --- | --- |
+| Ubuntu / Debian | `sudo apt install build-essential cmake pkg-config git curl libgtk-4-dev libwebkitgtk-6.0-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev libpulse-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev` |
+| Fedora | `sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config git curl gtk4-devel webkitgtk6.0-devel fontconfig-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libXi-devel libXrandr-devel libXcursor-devel vulkan-loader-devel alsa-lib-devel pulseaudio-libs-devel gstreamer1-devel gstreamer1-plugins-base-devel` |
+| Arch | `sudo pacman -S --needed base-devel cmake pkgconf git curl gtk4 webkitgtk-6.0 fontconfig libxkbcommon libxkbcommon-x11 wayland libx11 libxi libxrandr libxcursor vulkan-headers vulkan-icd-loader alsa-lib libpulse gstreamer gst-plugins-base-libs gst-plugins-good` |
+| macOS | `xcode-select --install` |
+| Windows | Visual Studio C++ build tools and the WebView2 Runtime |
 
-```nix
-{
-    nixosConfigurations.hostname = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
-        modules = [
-            ./configuration.nix
-            home-manager.nixosModules.home-manager
-            {
-                home-manager.extraSpecialArgs = { inherit inputs; };
-                home-manager.users.username = import ./home-manager.nix;
-            }
-        ];
-    };
-}
-```
-
-`configuration.nix`
-```nix
-{
-    inputs,
-    pkgs,
-    ...
-}: {
-    environment.systemPackages = [
-        inputs.serein.packages.${pkgs.stdenv.hostPlatform.system}.default
-    ];
-}
-```
-
-`home-manager.nix`
-```nix
-{
-    inputs,
-    pkgs,
-    ...
-}: {
-    home.packages = [
-        inputs.serein.packages.${pkgs.stdenv.hostPlatform.system}.default
-    ];
-}
-```
-
-#### 5. Standalone AppImage (Portable)
-
-Download `serein-<version>-Linux-X64.AppImage` from [Releases](https://github.com/ViceVerse-cz/Serein/releases), make it executable, and run:
 ```sh
-chmod +x ./serein-*-Linux-X64.AppImage
-./serein-*-Linux-X64.AppImage
-```
-Keep the AppImage in a writable directory to receive in-app updates via **Settings → Updates**. Note that the AppImage uses host GTK4 and WebKitGTK 6.0 libraries; see [AppImage setup and runtime dependencies](packaging/appimage/README.md) for host requirements.
+git clone https://github.com/HaraldErik/Serein-Fork
+cd Serein-Fork
 
-</details>
-
-<details>
-<summary><h3>🪟 Windows (Installer, PowerShell, Portable)</h3></summary>
-
-#### 1. Setup Installer (Recommended)
-Download the `Windows-X64-Setup.exe` or `Windows-ARM64-Setup.exe` asset for your system from [Releases](https://github.com/ViceVerse-cz/Serein/releases) and run it:
-- Installs per-user to `%LOCALAPPDATA%\Programs\Serein` without requiring administrator/UAC elevation.
-- Automatically registers Start Menu shortcuts and configures AppUserModelID (`cz.viceverse.serein`) for native Windows toast notifications.
-- Registers in Windows Settings (Installed Apps / Add or Remove Programs) with full uninstall support.
-- Fully compatible with in-app self-updates: updates automatically synchronize the registered version.
-
-#### 2. Standalone PowerShell Setup
-Extract the `Windows-X64.zip` or `Windows-ARM64.zip` asset for your system and run:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
-```
-To uninstall later:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Uninstall
+cargo run --locked --release                        # run the client (saved login or official login webview)
+cargo run --locked --features demo -- --demo        # synthetic offline conversations, no account needed
 ```
 
-#### 3. Portable Archive
-Extract the `Windows-X64.zip` or `Windows-ARM64.zip` asset for your system anywhere and launch `serein.exe`. To enable native desktop notifications:
-```powershell
-powershell -File .\install-notifications.ps1
-```
-Run the script from the extracted folder beside `serein.exe`. If PowerShell's `RemoteSigned` policy blocks the downloaded script, review it and run `Unblock-File -LiteralPath .\install-notifications.ps1` in that folder before retrying. The Windows installer registers the shortcut automatically, so installed builds do not need this script.
+Build packages yourself (Linux, run on the target distribution as a normal user):
 
-</details>
-
-<details>
-<summary><h3>🍎 macOS (Homebrew Cask, Standalone .app)</h3></summary>
-
-#### Homebrew Cask
 ```sh
-brew tap ViceVerse-cz/serein
-brew install --cask serein
+cargo xtask package --format deb        # or: rpm | arch | appimage
+python3 packaging/flatpak/build.py target/flatpak-build   # Flatpak, needs flatpak-builder
 ```
-The cask lives in the small [`homebrew-serein`](https://github.com/ViceVerse-cz/homebrew-serein) tap, so installing does not clone this repository. If you tapped the old URL, run `brew untap ViceVerse-cz/serein` first and tap again.
 
-#### Standalone Bundle
-Download `serein-<version>-macOS-ARM64.zip` from [Releases](https://github.com/ViceVerse-cz/Serein/releases), unzip, and drag `Serein.app` to your `/Applications` folder.
+Check your changes the way CI does:
 
-</details>
+```sh
+cargo xtask check          # fmt, Clippy, tests, policy checks
+cargo replay               # reducer benchmark
+node tests/login-handoff.cjs   # only for login changes
+```
+
+Source builds store data in a separate `serein-development` directory so they never touch an installed
+Serein. Set `SEREIN_DATA_DIR` to an absolute path to use another data root. Login tokens stay in the OS
+credential store.
+
+## Plugins
+
+Plugins are small, sandboxed WebAssembly modules. Write them in Rust (SDK included), C, C++ or anything
+that compiles to Wasm. They are native Serein plugins, **not** Vencord/Equicord plugins.
+
+**Use a plugin:** *Settings → Extensions → Import*, choose a `.serein-extension` file, review the
+permissions it asks for, enable it. The catalog tab lists reviewed packages. Disabling removes the
+package and its data.
+
+**What they can do (today):** show native panels, read data Serein already loaded (selected channel,
+messages, members, voice state…), edit your draft, save one small value, react to message and app
+events, change appearance, add a custom presence, **put badges and text beside message authors**, and
+*propose* actions (send, edit, react, navigate, moderate…) that run only after you click **Apply**.
+
+**What they cannot do:** read your token, touch files, use the network, or run while the UI is drawing.
+Each call gets a fresh sandbox: 16 MiB memory, a fixed CPU budget, 256 KiB of input/output. This is why
+plugins cost almost no idle RAM. Up to 64 plugins can be installed.
+
+**Write one in five minutes:**
+
+```sh
+rustup target add wasm32-unknown-unknown
+cd examples/extensions
+cargo build --release --target wasm32-unknown-unknown -p link-badges
+python ../../extensions/pack.py link-badges/manifest.json \
+    target/wasm32-unknown-unknown/release/link_badges.wasm link-badges.serein-extension
+cd ../.. && cargo run --locked --features demo -- --demo      # then import the file in Settings → Extensions
+```
+
+Read the **[Plugin guide](docs/plugin-guide.md)** for the manifest, actions, permissions, limits, testing
+and the decorations API, and browse the [example plugins](examples/extensions). The
+[roadmap](docs/plugin-api-v2.md) lists what is planned next (UI buttons and menus, send hooks and
+commands, timers, pull-only network access, limited auto-apply) and what will never be supported.
+
+## Troubleshooting
+
+| Problem | Try |
+| --- | --- |
+| Pasting an image does nothing on Wayland | Copy the image again; Serein reads PNG, JPEG, WebP and GIF clipboard offers. If it still fails, report which app you copied from. |
+| Arch script: `rustup` and `rust` conflict | Use the current script (`git pull`); it keeps your installed Rust. |
+| App is missing from the KDE menu after install | Re-run the script's last step: `kbuildsycoca6 --noincremental`, or log out and back in. |
+| A false "update available" notice | Older builds compared against upstream releases. Pull the latest commit and rebuild; updates now come from this fork's releases. |
+| No sound / voice fails | Install `gst-plugins-good`; screen share needs `gst-plugin-pipewire` and a ScreenCast portal. |
+| Plugin import is rejected | The manifest asks for an unknown permission or an action whose surface needs a permission you did not list. See the [guide](docs/plugin-guide.md#permissions-capabilities). |
+| Build fails with a missing `pango`/`gtk4` library | Install the development packages from the table above. |
 
 ---
 
@@ -293,6 +209,8 @@ Download `serein-<version>-macOS-ARM64.zip` from [Releases](https://github.com/V
 
 ## Measured Performance vs. Official Discord
 
+*Figures below were measured by the upstream project on macOS; they are not re-measured for this fork or its plugin additions.*
+
 > **Testing Scenario:** Browsing channels while joined in a Voice Channel (VC) and streaming screen at 60 FPS on macOS.
 
 | Metric | Official Discord Client (Electron) | Serein (Native Rust + egui/wgpu) | Advantage |
@@ -308,46 +226,6 @@ Download `serein-<version>-macOS-ARM64.zip` from [Releases](https://github.com/V
 | <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-serein-cpu.png" alt="Serein CPU Usage" width="450" /> |
 
 ---
-
-## Quick Start
-
-### Prerequisites
-Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain and CMake installed for your platform:
-- **macOS:** Xcode command-line tools (`xcode-select --install`)
-- **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, fontconfig, and Vulkan drivers (see [Platform Support](docs/platform-support.md))
-- **Windows:** Visual Studio C++ build tools and WebView2 Runtime
-
-### Running Locally
-
-```sh
-# 1. Run synthetic conversations; extension browsing uses public GitHub downloads
-cargo run --locked --features demo -- --demo
-
-# 2. Launch standard client with voice (uses saved login or official webview)
-cargo run --locked
-```
-
-Default source builds keep SQLite, image caches, extensions and game metadata in the OS-local
-`serein-development` directory, isolated from installed Serein data and safe from `cargo clean`.
-Set `SEREIN_DATA_DIR` to another absolute path when development copies need separate data roots;
-packaged builds use the normal `serein` directory when the variable is absent. Login tokens remain
-in the operating-system credential store under separate development and packaged-build entries.
-
-### Workspace Commands
-
-```sh
-# Run full workspace validation (formatting, Clippy, tests, policy checks)
-cargo xtask check
-
-# Run release reducer benchmark
-cargo replay
-
-# Run authentication bridge JS test harness
-node tests/login-handoff.cjs
-
-# Package release including voice (macOS .app bundle, Linux .deb by default)
-cargo xtask package
-```
 
 ---
 
@@ -422,33 +300,25 @@ For full details, review the [Storage Policy](docs/storage-policy.md) and [Threa
 
 ## Documentation
 
-- [Architecture & Monorepo Design](docs/architecture.md)
-- [Discord Compatibility & Protocol Details](docs/discord-compatibility.md)
-- [Authentication & Login Handoff](docs/authentication.md)
-- [Storage Policy & Cache Retention](docs/storage-policy.md)
-- [Platform Support & Build Requirements](docs/platform-support.md)
-- [Nix Package & Development Shell](nix/README.md)
-- [Voice Architecture & Procedure](docs/voice.md)
-- [Design Tokens & UI Styling](docs/design.md)
-- [Extensions & Plugin Architecture](docs/extensions.md)
-- [Plugin API v2 design (proposal)](docs/plugin-api-v2.md)
-- [Extension SDK Creator Wiki](https://github.com/ViceVerse-cz/Serein/wiki)
-- [SDK Examples and Offline Authoring Guide](examples/extensions/README.md)
-- [Theme API Specification](docs/theme-api.md)
-- [Threat Model & Security](docs/threat-model.md)
-- [Third-Party Licenses & Notices](THIRD_PARTY_NOTICES.md)
-
----
+| Topic | Where |
+| --- | --- |
+| **Plugin guide (start here)** | [docs/plugin-guide.md](docs/plugin-guide.md) |
+| Plugin API roadmap and design | [docs/plugin-api-v2.md](docs/plugin-api-v2.md) |
+| SDK overview, data and action reference | [overview](docs/extension-sdk-overview.md), [data](docs/extension-sdk-reference.md), [actions](docs/extension-sdk-actions.md), [troubleshooting](docs/extension-sdk-troubleshooting.md) |
+| Capability (permission) table | [docs/extensions.md](docs/extensions.md#capability-reference) |
+| Example plugins and offline authoring | [examples/extensions](examples/extensions/README.md) |
+| Themes | [docs/theme-api.md](docs/theme-api.md) |
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Discord compatibility and protocol | [docs/discord-compatibility.md](docs/discord-compatibility.md) |
+| Authentication | [docs/authentication.md](docs/authentication.md) |
+| Storage policy | [docs/storage-policy.md](docs/storage-policy.md) |
+| Platform support | [docs/platform-support.md](docs/platform-support.md) |
+| Voice | [docs/voice.md](docs/voice.md) |
+| Linux packaging, Arch installer | [packaging/linux](packaging/linux/README.md), [packaging/arch](packaging/arch/README.md) |
+| Nix | [nix/README.md](nix/README.md) |
+| Threat model | [docs/threat-model.md](docs/threat-model.md) |
+| Third-party licenses | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
 ## License
 
-Original Serein code is dual-licensed under either:
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
-
-at your option. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-Demo fixtures and simulated actions are excluded from normal app and CI packages.
-Build with `--features demo` and launch with `--demo` to enable them; `--demo-*`
-scenario flags additionally require `--demo`. `cargo xtask package` always builds
-without demo support, while offline tests can still use synthetic fixtures.
+MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
