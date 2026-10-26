@@ -33,10 +33,19 @@ echo ">> Installing build dependencies"
 sudo pacman -S --needed --noconfirm base-devel cmake pkgconf curl ca-certificates git tar gzip xz \
   python coreutils desktop-file-utils file gtk4 webkitgtk-6.0 fontconfig libxkbcommon \
   libxkbcommon-x11 wayland libx11 libxi libxrandr libxcursor vulkan-headers vulkan-icd-loader \
-  alsa-lib libpulse gstreamer gst-plugins-base-libs gst-plugins-good libarchive rustup
+  alsa-lib libpulse gstreamer gst-plugins-base-libs gst-plugins-good libarchive
+
+# rustup and the `rust` package conflict on Arch: keep whichever is already installed.
+if ! command -v rustup >/dev/null && ! command -v cargo >/dev/null; then
+  sudo pacman -S --needed --noconfirm rustup
+fi
 
 echo ">> Preparing the pinned Rust toolchain"
-rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install --profile minimal
+if command -v rustup >/dev/null; then
+  rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install --profile minimal
+else
+  echo "Using system Rust ($(rustc --version)); the repo pins $(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml) and only rustup can fetch it."
+fi
 
 echo ">> Building (this takes a while)"
 cargo xtask package --format arch
@@ -48,4 +57,10 @@ if [ -z "$package" ]; then
 fi
 echo ">> Installing $package with pacman"
 sudo pacman -U --noconfirm "$package"
+echo ">> Refreshing desktop entries, icons and the KDE application menu"
+sudo update-desktop-database /usr/share/applications 2>/dev/null || true
+sudo gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+for rebuild in kbuildsycoca6 kbuildsycoca5; do
+  command -v "$rebuild" >/dev/null && { "$rebuild" --noincremental >/dev/null 2>&1 || true; break; }
+done
 echo "Done. Start Serein from your app menu or run: serein"

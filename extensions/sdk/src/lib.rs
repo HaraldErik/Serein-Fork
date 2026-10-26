@@ -28,6 +28,8 @@ mod channel_metadata;
 pub use channel_metadata::*;
 mod member_details;
 pub use member_details::*;
+mod decorations;
+pub use decorations::*;
 mod app;
 pub use app::*;
 mod extended;
