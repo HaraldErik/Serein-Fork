@@ -14,6 +14,9 @@ fn manifest(action: &str, surface: Surface) -> Manifest {
 		Surface::AppEvent => capabilities.push(Capability::AppEvents),
 		Surface::Tick => capabilities.push(Capability::Appearance),
 		Surface::BeforeSend | Surface::Command => capabilities.push(Capability::Composer),
+		Surface::Decorate => {
+			capabilities.extend([Capability::Decorations, Capability::MessageEvents])
+		}
 	}
 	let manifest = Manifest {
 		api_version: extensions::API_VERSION,

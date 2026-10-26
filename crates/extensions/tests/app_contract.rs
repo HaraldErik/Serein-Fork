@@ -66,6 +66,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::AppEvent,
 		Surface::BeforeSend,
 		Surface::Command,
+		Surface::Decorate,
 	]
 	.into_iter()
 	.enumerate()
@@ -594,6 +595,83 @@ fn before_send_needs_the_draft_and_may_only_rewrite_it() {
 	}
 	manifest.capabilities.retain(|c| *c != Capability::Composer);
 	assert!(matches!(manifest.validate(), Err(Error::Capability)));
+}
+
+#[test]
+fn decorate_batches_are_bounded_and_may_only_decorate_their_own_messages() {
+	let mut manifest = test_manifest(vec![Capability::Decorations]);
+	manifest.actions[0].surface = Surface::Decorate;
+	assert!(
+		matches!(manifest.validate(), Err(Error::Capability)),
+		"message text needs message_events"
+	);
+	manifest.capabilities.push(Capability::MessageEvents);
+	manifest.validate().unwrap();
+	let message = |id: &str| MessageEvent {
+		kind: MessageEventKind::Create,
+		channel_id: "20".into(),
+		message_id: id.into(),
+		author_id: Some("3".into()),
+		content: Some("hello".into()),
+	};
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(input.validate(&manifest).is_err(), "a batch is required");
+	input.messages = Some(Box::new(
+		(1..=MAX_DECORATE_BATCH as u64 + 1)
+			.map(|id| message(&id.to_string()))
+			.collect(),
+	));
+	assert!(input.validate(&manifest).is_err(), "batch is bounded");
+	input.messages.as_mut().unwrap().truncate(2);
+	input.validate(&manifest).unwrap();
+	let decorate = |id: &str| MessageDecoration {
+		message_id: id.into(),
+		decoration: Decoration {
+			badges: vec![Badge {
+				text: "OK".into(),
+				..Default::default()
+			}],
+			..Default::default()
+		},
+	};
+	let wire = sdk::DecorationOutput {
+		decorations: vec![sdk::MessageDecoration {
+			message_id: "1".into(),
+			decoration: sdk::Decoration::default(),
+		}],
+		..Default::default()
+	};
+	let output: Output = serde_json::from_slice(&serde_json::to_vec(&wire).unwrap()).unwrap();
+	output.validate(&manifest, &input).unwrap();
+	let foreign = Output {
+		decorations: vec![decorate("1"), decorate("999")],
+		..Default::default()
+	};
+	assert!(
+		foreign.validate(&manifest, &input).is_err(),
+		"IDs come from the batch"
+	);
+	let panel = Output {
+		decorations: vec![decorate("2")],
+		panel: vec![Element::Separator],
+		..Default::default()
+	};
+	assert!(panel.validate(&manifest, &input).is_err());
+	// Other surfaces never receive batches or return per-message decorations.
+	manifest.actions[0].surface = Surface::MessageEvent;
+	assert!(input.validate(&manifest).is_err());
+	input.messages = None;
+	assert!(
+		Output {
+			decorations: vec![decorate("1")],
+			..Default::default()
+		}
+		.validate(&manifest, &input)
+		.is_err()
+	);
 }
 
 #[test]

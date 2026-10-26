@@ -8,6 +8,7 @@ use extensions::{
 };
 use std::{
 	collections::{BTreeMap, BTreeSet, VecDeque},
+	hash::{Hash, Hasher},
 	path::PathBuf,
 	sync::{Arc, mpsc},
 	time::{Duration, Instant},
@@ -26,9 +27,9 @@ struct Pending {
 }
 impl Pending {
 	fn reactive(&self) -> bool {
-		self.invocation
-			.as_ref()
-			.is_some_and(|(_, input, _)| input.message_event.is_some() || input.app_event.is_some())
+		self.invocation.as_ref().is_some_and(|(_, input, _)| {
+			input.message_event.is_some() || input.app_event.is_some() || input.messages.is_some()
+		})
 	}
 }
 
@@ -127,13 +128,23 @@ fn attach_app_data(
 
 enum ReactiveEvent {
 	Message(MessageEvent),
+	/// Already-loaded messages for a `decorate` action, newest first.
+	Decorate(Vec<MessageEvent>),
 	App(AppEventKind),
 	ActionResult(ActionResult),
 }
+fn event_bytes(event: &MessageEvent) -> usize {
+	event.channel_id.len()
+		+ event.message_id.len()
+		+ event.author_id.as_ref().map_or(0, String::len)
+		+ event.content.as_ref().map_or(0, String::len)
+}
+/// Message text in one `decorate` batch, keeping it well inside the event queue budget.
+const MAX_DECORATE_BATCH_BYTES: usize = 48 * 1024;
 impl ReactiveEvent {
 	fn available(&self, state: &State) -> bool {
 		match self {
-			Self::Message(_) => crate::extension_events::available(state),
+			Self::Message(_) | Self::Decorate(_) => crate::extension_events::available(state),
 			Self::App(_) | Self::ActionResult(_) => crate::extension_app::available(state),
 		}
 	}
@@ -152,12 +163,8 @@ impl QueuedEvent {
 			+ match &self.event {
 				ReactiveEvent::App(_) => 0,
 				ReactiveEvent::ActionResult(result) => result.request_id.len(),
-				ReactiveEvent::Message(event) => {
-					event.channel_id.len()
-						+ event.message_id.len()
-						+ event.author_id.as_ref().map_or(0, String::len)
-						+ event.content.as_ref().map_or(0, String::len)
-				}
+				ReactiveEvent::Message(event) => event_bytes(event),
+				ReactiveEvent::Decorate(messages) => messages.iter().map(event_bytes).sum(),
 			}
 	}
 }
@@ -190,6 +197,8 @@ pub struct Bridge {
 	message_event_at: Option<Instant>,
 	message_events_dropped: bool,
 	app_key: Option<crate::extension_app::ChangeKey>,
+	/// Last loaded-message batch offered to `decorate` plugins.
+	decorate_key: Option<u64>,
 	extended_key: Option<u64>,
 	app_context_changed: bool,
 	data_changes: crate::extension_data_events::Changes,
@@ -461,6 +470,110 @@ impl Bridge {
 			self.message_events.push_back(queued);
 		}
 	}
+	/// Offers the selected conversation's loaded messages to `decorate` plugins whenever that
+	/// set changes (conversation switch, history page, edit, plugin enabled).
+	fn queue_decorate_batches(&mut self, state: &State) {
+		let plugins: Vec<(String, String)> = self
+			.installed
+			.iter()
+			.filter(|entry| {
+				entry.error.is_none()
+					&& !self.disabled.contains(&entry.manifest.id)
+					&& entry
+						.manifest
+						.capabilities
+						.contains(&Capability::Decorations)
+					&& entry
+						.manifest
+						.capabilities
+						.contains(&Capability::MessageEvents)
+			})
+			.filter_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.find(|action| action.surface == Surface::Decorate)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		let Some(channel) = state.selected.filter(|_| {
+			!plugins.is_empty()
+				&& crate::extension_events::available(state)
+				&& self.scope_current(state)
+		}) else {
+			self.decorate_key = None;
+			return;
+		};
+		let mut bytes = 0;
+		let messages: Vec<&model::Message> = state
+			.timeline
+			.iter()
+			.rev()
+			.filter(|message| {
+				message.channel == channel
+					&& !message.ephemeral
+					&& message.flags & 64 == 0
+					&& message.author.id.0 != 0
+					&& message.content.len() <= extensions::MAX_EVENT_CONTENT_BYTES
+			})
+			.take_while(|message| {
+				bytes += message.content.len();
+				bytes <= MAX_DECORATE_BATCH_BYTES
+			})
+			.take(extensions::MAX_DECORATE_BATCH)
+			.collect();
+		if messages.is_empty() {
+			return;
+		}
+		let mut key = std::hash::DefaultHasher::new();
+		(state.generation, channel, &plugins).hash(&mut key);
+		for message in &messages {
+			(message.id, message.revision).hash(&mut key);
+		}
+		let key = key.finish();
+		if self.decorate_key == Some(key) {
+			return;
+		}
+		let batch: Vec<MessageEvent> = messages
+			.iter()
+			.map(|message| MessageEvent {
+				kind: extensions::MessageEventKind::Create,
+				channel_id: channel.0.to_string(),
+				message_id: message.id.0.to_string(),
+				author_id: Some(message.author.id.0.to_string()),
+				content: Some(message.content.clone()),
+			})
+			.collect();
+		let queued: Vec<QueuedEvent> = plugins
+			.into_iter()
+			.map(|(id, action)| QueuedEvent {
+				id,
+				action,
+				context: ExtensionContext::capture(state, false),
+				event: ReactiveEvent::Decorate(batch.clone()),
+			})
+			.collect();
+		let bytes: usize = self
+			.message_events
+			.iter()
+			.map(QueuedEvent::bytes)
+			.sum::<usize>()
+			+ queued.iter().map(QueuedEvent::bytes).sum::<usize>();
+		if self.message_events.len() + queued.len() > MAX_MESSAGE_EVENTS
+			|| bytes > MAX_MESSAGE_EVENT_BYTES
+		{
+			// Try again on a later frame, once the queue drains.
+			return;
+		}
+		// A newer batch for the same plugin replaces one that has not run yet.
+		self.message_events.retain(|event| {
+			!matches!(event.event, ReactiveEvent::Decorate(_))
+				|| !queued.iter().any(|next| next.id == event.id)
+		});
+		self.message_events.extend(queued);
+		self.decorate_key = Some(key);
+	}
 	pub fn cancel_stale_message_events(&mut self, state: &State) {
 		let available = self.scope_current(state);
 		self.message_events.retain(|event| {
@@ -474,7 +587,7 @@ impl Bridge {
 					.is_some_and(|(_, input, context)| {
 						!available
 							|| !context.is_current(state)
-							|| input.message_event.is_some()
+							|| (input.message_event.is_some() || input.messages.is_some())
 								&& !crate::extension_events::available(state)
 							|| input.app_event.is_some() && !crate::extension_app::available(state)
 					})
@@ -943,7 +1056,15 @@ impl Bridge {
 								.extensions
 								.apply_command_output(state, &context, replacement);
 						}
-						if surface == Some(Surface::Command)
+						if surface == Some(Surface::Decorate) {
+							for item in &output.decorations {
+								messaging.extensions.decorate_message(
+									&id,
+									&item.message_id,
+									item.decoration.clone(),
+								);
+							}
+						} else if surface == Some(Surface::Command)
 							&& output.panel.is_empty()
 							&& output.effects.is_empty()
 						{
@@ -1364,6 +1485,7 @@ impl Bridge {
 			self.pending.retain(|_, pending| pending.cleanup);
 		}
 		self.app_events(state, messaging);
+		self.queue_decorate_batches(state);
 		let available = self.scope_current(state);
 		let installed = &self.installed;
 		let disabled = &self.disabled;
@@ -1395,6 +1517,9 @@ impl Bridge {
 					match queued.event {
 						ReactiveEvent::Message(event) => {
 							invocation.message_event = Some(Box::new(event))
+						}
+						ReactiveEvent::Decorate(messages) => {
+							invocation.messages = Some(Box::new(messages))
 						}
 						ReactiveEvent::App(kind) => {
 							invocation.app_event = Some(kind);
@@ -1903,6 +2028,64 @@ mod tests {
 		};
 		assert!(bridge.has_message_events(&state));
 		(bridge, state, event)
+	}
+
+	#[test]
+	fn decorate_plugins_get_one_bounded_batch_per_change_of_loaded_messages() {
+		let (mut bridge, mut state, _) = message_events_fixture();
+		let manifest = &mut bridge.installed[0].manifest;
+		manifest.capabilities = vec![Capability::MessageEvents, Capability::Decorations];
+		manifest.actions = vec![extensions::Action {
+			id: "decorate".into(),
+			label: "Decorate".into(),
+			surface: Surface::Decorate,
+		}];
+		let channel = state.selected.unwrap();
+		for id in 0..40 {
+			let mut message = test_support::message(5000 + id, channel);
+			message.content = "x".repeat(1024);
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		let batch = |bridge: &Bridge| -> Vec<Vec<String>> {
+			bridge
+				.message_events
+				.iter()
+				.filter_map(|event| match &event.event {
+					ReactiveEvent::Decorate(messages) => {
+						Some(messages.iter().map(|m| m.message_id.clone()).collect())
+					}
+					_ => None,
+				})
+				.collect()
+		};
+		bridge.queue_decorate_batches(&state);
+		let first = batch(&bridge);
+		assert_eq!(first.len(), 1);
+		assert!(first[0].len() <= extensions::MAX_DECORATE_BATCH);
+		assert_eq!(first[0][0], "5039", "newest message first");
+		let total: usize = bridge.message_events.iter().map(QueuedEvent::bytes).sum();
+		assert!(total <= MAX_MESSAGE_EVENT_BYTES);
+		// Nothing changed: no second batch.
+		bridge.queue_decorate_batches(&state);
+		assert_eq!(batch(&bridge).len(), 1);
+		// A newly loaded message replaces the waiting batch instead of queueing another.
+		state
+			.timeline
+			.insert(test_support::message(6000, channel), false, false)
+			.unwrap();
+		bridge.queue_decorate_batches(&state);
+		let next = batch(&bridge);
+		assert_eq!(next.len(), 1);
+		assert_eq!(next[0][0], "6000");
+		// Without the grant, nothing is offered.
+		bridge.message_events.clear();
+		bridge.installed[0].manifest.capabilities = vec![Capability::Decorations];
+		state
+			.timeline
+			.insert(test_support::message(6001, channel), false, false)
+			.unwrap();
+		bridge.queue_decorate_batches(&state);
+		assert!(batch(&bridge).is_empty());
 	}
 
 	#[test]

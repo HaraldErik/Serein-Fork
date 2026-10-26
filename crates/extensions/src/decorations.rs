@@ -86,6 +86,14 @@ impl Decoration {
 	}
 }
 
+/// One message's decoration from a `decorate` batch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageDecoration {
+	pub message_id: String,
+	pub decoration: Decoration,
+}
+
 /// Least-recently-used cache bounded by item count and bytes, keyed by Discord ID (snowflake)
 /// and plugin ID. Lookups are O(plugins on that target), so the UI can call `get` every frame.
 #[derive(Debug, Default)]

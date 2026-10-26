@@ -156,6 +156,7 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `message` | You pick it from a message's menu | panel or proposal about that message |
 | `composer` | You pick it from the composer **Tools** menu | `replacement` draft text |
 | `message_event` | A message is created, edited or deleted | `storage`, or a **decoration** |
+| `decorate` | Preview: the conversation's loaded messages change | per-message **decorations** |
 | `app_event` | Connection, navigation, voice, settings… change | `storage` |
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
@@ -211,8 +212,37 @@ Manifest: `"capabilities": ["message_events", "decorations"]` and an action with
 | `prefix` / `suffix` | up to 64 bytes each, no control characters |
 | `presentation` | `blur`, `collapse` or `hide`: the message body is replaced by a "… by a plugin. Click to show." placeholder until you click it. All three currently look the same apart from the wording. |
 
-Current gaps: decorations show only in the normal (non-compact) message layout; they only appear for
-messages seen after the plugin is enabled; there are no user or server decorations yet.
+### Decorating messages that are already loaded
+
+`message_event` only sees new and edited messages. To decorate history too, add an action with
+`"surface": "decorate"` (requires `decorations` and `message_events`). Serein calls it with up to 32
+of the conversation's loaded messages in `messages` (newest first, at most 48 KiB of text) whenever
+that set changes: you open a conversation, older history loads, a message is edited, or the plugin is
+enabled. Return one entry per message in `decorations`:
+
+```rust
+use serein_extension_sdk::{DecorateInvocation, DecorationOutput, MessageDecoration};
+
+fn handle(input: DecorateInvocation) -> DecorationOutput {
+    let mut output = DecorationOutput::default();
+    if input.invocation.action == "decorate" {
+        output.decorations = input.messages.into_iter()
+            .filter_map(|m| Some(MessageDecoration {
+                message_id: m.message_id,
+                decoration: my_badges(m.content.as_deref()?)?,
+            }))
+            .collect();
+    }
+    output
+}
+```
+
+`DecorateInvocation` also carries `message_event`, so one handler can serve both actions, as
+[`link-badges`](../examples/extensions/link-badges/src/lib.rs) does. Each `message_id` must come from
+the batch; a `decorate` result may only contain `decorations` and `storage`.
+
+Current gaps: decorations show only in the normal (non-compact) message layout, and there are no user
+or server decorations yet.
 
 ## Send hooks: rewrite the draft when you press Send (preview)
 
