@@ -554,7 +554,7 @@ failed restore. Queue, payload and database bounds are unchanged.
 
 Community extensions (September 12): packages and grants are stored under the
 application data directory's `extensions` subtree. Plugin data/grants are
-account-isolated; declarative themes are device preferences. Up to eight installed
+account-isolated; declarative themes are device preferences. Up to 64 installed
 themes remain available in Colour preset; switching only changes the bounded
 64-byte active theme identifier and retains the packages. Installation,
 validation, invocation storage and removal run on a bounded background worker.
