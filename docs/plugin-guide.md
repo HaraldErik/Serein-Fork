@@ -207,7 +207,7 @@ Manifest: `"capabilities": ["message_events", "decorations"]` and an action with
 | --- | --- |
 | `badges` | up to 4; text up to 16 characters; tooltip up to 128 bytes; `color` as `0xRRGGBB` |
 | `prefix` / `suffix` | up to 64 bytes each, no control characters |
-| `presentation` | `blur`, `collapse`, `hide` are accepted but **not applied yet** |
+| `presentation` | `blur`, `collapse` or `hide`: the message body is replaced by a "… by a plugin. Click to show." placeholder until you click it. All three currently look the same apart from the wording. |
 
 Current gaps: decorations show only in the normal (non-compact) message layout; they only appear for
 messages seen after the plugin is enabled; there are no user or server decorations yet.

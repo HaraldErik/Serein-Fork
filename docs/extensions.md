@@ -158,7 +158,7 @@ supports 54 capabilities, with at most 64 distinct declarations per manifest.
 | `member_details` | Read loaded guild member nicknames, role labels and matching server profile | Fresh selected member pane; 20 members/32 role IDs each/32 catalog roles; 6 KiB; no fetch |
 | `message_details` | Read loaded message metadata: replies, mentions, attachment labels and reaction counts | Fresh readable selected timeline; at most 20 messages (12 with `timeline`); no text or URLs |
 | `relationships` | Read loaded friends, requests and restricted-account labels | Connected; at most 100; known flags distinguish unloaded lists; no fetch |
-| `decorations` | Preview: a `message_event` handler may return a `decoration` (up to 4 badges, a 64-byte prefix/suffix) for the message that triggered it | Shown beside the author name from a 4 MiB / 2,048-item host cache; the UI never calls the plugin. `presentation` (blur/collapse/hide) is validated but not yet applied |
+| `decorations` | Preview: a `message_event` handler may return a `decoration` (up to 4 badges, a 64-byte prefix/suffix) for the message that triggered it | Shown beside the author name from a 4 MiB / 2,048-item host cache; the UI never calls the plugin. `presentation` (blur/collapse/hide) replaces the body with a click-to-show placeholder; decorations are cleared on disable and account change |
 | `timeline` | Read ordinary loaded messages in the active conversation | Fresh readable timeline, at most 50 (12 with `message_details`); no deleted/ephemeral text |
 | `members` | Read loaded members or DM recipients | Active channel, at most 100; no fetch |
 | `presence` | Read cached status strings for that context | At most 100; no activity/private device payloads |

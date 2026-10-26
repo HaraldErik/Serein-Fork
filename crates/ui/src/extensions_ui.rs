@@ -857,6 +857,10 @@ impl ExtensionUi {
 		};
 	}
 	pub fn reset_runtime(&mut self) {
+		// Decorations describe the previous account's messages.
+		if let Ok(mut cache) = self.decorations.lock() {
+			cache.clear();
+		}
 		self.catalog_refreshing = false;
 		self.theme_editor = None;
 		self.gallery_preview = None;
@@ -2960,6 +2964,35 @@ fn apply_proposal(state: &mut State, context: &ExtensionContext, replacement: &s
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn decorations_leave_with_their_plugin_and_never_survive_an_account_change() {
+		let mut ui = ExtensionUi::default();
+		let badge = || extensions::Decoration {
+			badges: vec![extensions::Badge {
+				text: "TAG".into(),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		ui.decorate_message("a", "10", badge());
+		ui.decorate_message("b", "10", badge());
+		ui.decorate_message("a", "not-an-id", badge());
+		let shared = ui.decorations();
+		assert_eq!(shared.lock().unwrap().len(), 2);
+		ui.remove_runtime("a");
+		assert_eq!(
+			shared
+				.lock()
+				.unwrap()
+				.get(10)
+				.map(|(id, _)| id)
+				.collect::<Vec<_>>(),
+			["b"]
+		);
+		ui.reset_runtime();
+		assert!(shared.lock().unwrap().is_empty());
+	}
 
 	#[test]
 	fn app_snapshot_payloads_are_bounded_before_ui_queueing() {
