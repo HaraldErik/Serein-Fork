@@ -6,6 +6,7 @@ mod archives;
 mod audio;
 mod badges;
 mod forwarding;
+mod plugin_decorations;
 mod role_names;
 pub use audio::{AudioCommand, AudioState, AudioUi};
 mod video;
@@ -4893,6 +4894,7 @@ impl MessagingUi {
 						self.timeline.instant_scrolling =
 							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();
+						self.timeline.decorations = self.extensions.decorations();
 						self.timeline.quick_reactions =
 							Some(self.reaction_picker.quick_reactions());
 						let mut seen = std::collections::BTreeSet::new();

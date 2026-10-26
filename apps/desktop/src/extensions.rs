@@ -969,9 +969,7 @@ fn install_stored(
 		return Err("Account extension cleanup is incomplete; reopen Extensions to retry".into());
 	}
 	if !directory.exists() && count_directories(&parent)? >= MAX_PER_SCOPE {
-		return Err(
-			"Disable an extension first; each scope allows 64 installed extensions".into(),
-		);
+		return Err("Disable an extension first; each scope allows 64 installed extensions".into());
 	}
 	if stored.package.manifest.kind == ExtensionKind::Plugin
 		&& !is_proxy(&stored.package.manifest)

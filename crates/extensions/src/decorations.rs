@@ -86,13 +86,19 @@ impl Decoration {
 	}
 }
 
-/// Least-recently-used cache bounded by item count and bytes, keyed by plugin and target ID.
+/// Least-recently-used cache bounded by item count and bytes, keyed by Discord ID (snowflake)
+/// and plugin ID. Lookups are O(plugins on that target), so the UI can call `get` every frame.
 #[derive(Debug, Default)]
 pub struct DecorationCache {
-	entries: HashMap<(String, String), (Decoration, u64)>,
-	order: BTreeMap<u64, (String, String)>,
+	entries: HashMap<u64, BTreeMap<String, (Decoration, u64)>>,
+	order: BTreeMap<u64, (u64, String)>,
 	clock: u64,
+	items: usize,
 	bytes: usize,
+}
+
+fn cost(decoration: &Decoration, plugin: &str) -> usize {
+	decoration.bytes() + plugin.len() + 16
 }
 
 impl DecorationCache {
@@ -100,52 +106,54 @@ impl DecorationCache {
 	pub fn insert(
 		&mut self,
 		plugin: &str,
-		target: &str,
+		target: u64,
 		decoration: Decoration,
 	) -> Result<(), Error> {
 		decoration.validate()?;
-		if plugin.is_empty() || plugin.len() > 128 || target.is_empty() || target.len() > 32 {
+		if plugin.is_empty() || plugin.len() > 128 || target == 0 {
 			return Err(Error::Invalid);
 		}
-		let key = (plugin.to_owned(), target.to_owned());
-		self.remove(&key);
-		let size = decoration.bytes() + key.0.len() + key.1.len();
+		let size = cost(&decoration, plugin);
 		if size > MAX_CACHE_BYTES {
 			return Err(Error::Limit);
 		}
-		while self.entries.len() >= MAX_CACHE_ITEMS || self.bytes + size > MAX_CACHE_BYTES {
-			let Some((_, oldest)) = self.order.pop_first() else {
+		self.remove(plugin, target);
+		while self.items >= MAX_CACHE_ITEMS || self.bytes + size > MAX_CACHE_BYTES {
+			let Some((_, (old_target, old_plugin))) = self.order.pop_first() else {
 				break;
 			};
-			if let Some((old, _)) = self.entries.remove(&oldest) {
-				self.bytes -= old.bytes() + oldest.0.len() + oldest.1.len();
-			}
+			self.take(old_plugin.as_str(), old_target, false);
 		}
 		self.clock += 1;
-		self.order.insert(self.clock, key.clone());
+		self.order.insert(self.clock, (target, plugin.to_owned()));
+		self.entries
+			.entry(target)
+			.or_default()
+			.insert(plugin.to_owned(), (decoration, self.clock));
+		self.items += 1;
 		self.bytes += size;
-		self.entries.insert(key, (decoration, self.clock));
 		Ok(())
 	}
 
-	/// All decorations for one target, in ascending plugin-ID order. Does not refresh recency.
-	pub fn get<'a>(&'a self, target: &'a str) -> impl Iterator<Item = (&'a str, &'a Decoration)> {
+	/// Decorations for one target in ascending plugin-ID order. Does not refresh recency.
+	pub fn get(&self, target: u64) -> impl Iterator<Item = (&str, &Decoration)> {
 		self.entries
-			.iter()
-			.filter(move |((_, id), _)| id == target)
-			.map(|((plugin, _), (decoration, _))| (plugin.as_str(), decoration))
+			.get(&target)
+			.into_iter()
+			.flatten()
+			.map(|(plugin, (decoration, _))| (plugin.as_str(), decoration))
 	}
 
 	/// Drops everything from one plugin (disable, update or logout).
 	pub fn remove_plugin(&mut self, plugin: &str) {
-		let keys: Vec<_> = self
+		let targets: Vec<u64> = self
 			.entries
-			.keys()
-			.filter(|key| key.0 == plugin)
-			.cloned()
+			.iter()
+			.filter(|(_, plugins)| plugins.contains_key(plugin))
+			.map(|(target, _)| *target)
 			.collect();
-		for key in keys {
-			self.remove(&key);
+		for target in targets {
+			self.remove(plugin, target);
 		}
 	}
 
@@ -154,17 +162,30 @@ impl DecorationCache {
 	}
 
 	pub fn len(&self) -> usize {
-		self.entries.len()
+		self.items
 	}
 
 	pub fn is_empty(&self) -> bool {
-		self.entries.is_empty()
+		self.items == 0
 	}
 
-	fn remove(&mut self, key: &(String, String)) {
-		if let Some((old, stamp)) = self.entries.remove(key) {
-			self.order.remove(&stamp);
-			self.bytes -= old.bytes() + key.0.len() + key.1.len();
+	fn remove(&mut self, plugin: &str, target: u64) {
+		self.take(plugin, target, true);
+	}
+
+	fn take(&mut self, plugin: &str, target: u64, forget_order: bool) {
+		let Some(plugins) = self.entries.get_mut(&target) else {
+			return;
+		};
+		if let Some((old, stamp)) = plugins.remove(plugin) {
+			if forget_order {
+				self.order.remove(&stamp);
+			}
+			self.items -= 1;
+			self.bytes -= cost(&old, plugin);
+		}
+		if plugins.is_empty() {
+			self.entries.remove(&target);
 		}
 	}
 }
@@ -215,25 +236,27 @@ mod tests {
 		let mut cache = DecorationCache::default();
 		for index in 0..MAX_CACHE_ITEMS + 10 {
 			cache
-				.insert("plugin", &index.to_string(), badge("b"))
+				.insert("plugin", index as u64 + 1, badge("b"))
 				.unwrap();
 		}
 		assert_eq!(cache.len(), MAX_CACHE_ITEMS);
-		assert_eq!(cache.get("0").count(), 0);
-		assert_eq!(cache.get(&(MAX_CACHE_ITEMS + 9).to_string()).count(), 1);
+		assert_eq!(cache.get(1).count(), 0);
+		assert_eq!(cache.get(MAX_CACHE_ITEMS as u64 + 10).count(), 1);
 	}
 
 	#[test]
 	fn cache_byte_accounting_survives_replace_and_plugin_removal() {
 		let mut cache = DecorationCache::default();
-		cache.insert("a", "1", badge("one")).unwrap();
-		cache.insert("a", "1", badge("two")).unwrap();
-		cache.insert("b", "1", badge("three")).unwrap();
+		cache.insert("a", 1, badge("one")).unwrap();
+		cache.insert("a", 1, badge("two")).unwrap();
+		cache.insert("b", 1, badge("three")).unwrap();
+		assert!(cache.insert("a", 0, badge("zero")).is_err());
 		assert_eq!(cache.len(), 2);
-		assert_eq!(cache.get("1").map(|(plugin, _)| plugin).min(), Some("a"));
+		assert_eq!(cache.get(1).map(|(plugin, _)| plugin).next(), Some("a"));
 		cache.remove_plugin("a");
 		assert_eq!(cache.len(), 1);
 		cache.remove_plugin("b");
 		assert!(cache.is_empty() && cache.bytes == 0 && cache.order.is_empty());
+		assert!(cache.entries.is_empty());
 	}
 }

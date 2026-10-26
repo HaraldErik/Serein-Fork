@@ -914,6 +914,15 @@ impl Bridge {
 							installed.api_proxy = Some(config.clone());
 							self.refresh_api_proxy();
 						}
+						if let (Some(event), Some(decoration)) =
+							(&invocation.message_event, &output.decoration)
+						{
+							messaging.extensions.decorate_message(
+								&id,
+								&event.message_id,
+								decoration.clone(),
+							);
+						}
 						if invocation.message_event.is_none() && invocation.app_event.is_none() {
 							messaging
 								.extensions

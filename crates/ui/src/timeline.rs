@@ -41,6 +41,7 @@ pub struct TimelineView {
 	pub(super) dismiss_ephemeral: Option<Id>,
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
 	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
+	pub(super) decorations: crate::plugin_decorations::SharedCache,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	/// A failed own row the reader dismissed this frame.
@@ -2073,6 +2074,7 @@ impl TimelineView {
 			let following = restored.is_none_or(|cursor| cursor.message.is_none());
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
+				decorations: self.decorations.clone(),
 				quick_reactions: self.quick_reactions,
 				double_click_reaction: self.double_click_reaction,
 				compact_messages: self.compact_messages,
@@ -3252,6 +3254,11 @@ impl TimelineView {
 													&message.author,
 												);
 												surface.keep(&author);
+												crate::plugin_decorations::paint(
+													ui,
+													&self.decorations,
+													message.id.0,
+												);
 												let time = timestamp(id);
 												let time = ui
 													.label(

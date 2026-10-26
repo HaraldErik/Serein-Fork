@@ -146,6 +146,7 @@ pub enum Capability {
 	DataEvents,
 	MessageDetails,
 	Relationships,
+	Decorations,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -531,6 +532,9 @@ pub struct Output {
 	pub storage: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub effects: Vec<HostEffect>,
+	/// Badges/text for the message that triggered a message-event handler.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub decoration: Option<Decoration>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1082,6 +1086,14 @@ impl Output {
 				|| !self.effects.is_empty())
 		{
 			return Err(Error::Capability);
+		}
+		if let Some(decoration) = &self.decoration {
+			if !manifest.capabilities.contains(&Capability::Decorations)
+				|| surface != Surface::MessageEvent
+			{
+				return Err(Error::Capability);
+			}
+			decoration.validate()?;
 		}
 		if let Some(config) = &self.api_proxy {
 			if !manifest.capabilities.contains(&Capability::ApiProxy)
