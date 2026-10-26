@@ -49,6 +49,12 @@ fn legacy_handler(input: sdk::Invocation) -> sdk::Output {
 fn host_invocations_and_legacy_handlers_keep_the_v1_contract() {
 	assert_eq!(sdk::API_VERSION, extensions::API_VERSION);
 	assert_eq!(sdk::MAX_IO_BYTES, extensions::MAX_IO_BYTES);
+	assert_eq!(
+		sdk::MAX_DECORATION_BADGES,
+		extensions::MAX_DECORATION_BADGES
+	);
+	assert_eq!(sdk::MAX_AFFIX_BYTES, extensions::MAX_AFFIX_BYTES);
+	assert_eq!(sdk::MAX_BADGE_TEXT_CHARS, extensions::MAX_BADGE_TEXT_CHARS);
 	for (action, surface) in [
 		("message", Surface::Message),
 		("compose", Surface::Composer),

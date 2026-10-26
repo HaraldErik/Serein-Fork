@@ -166,6 +166,7 @@ pub struct ExtensionUi {
 	result: Option<ResultPanel>,
 	error: Option<String>,
 	message_actions: Arc<Vec<MenuAction>>,
+	decorations: crate::plugin_decorations::SharedCache,
 	themes: bool,
 	query: String,
 	previews: BTreeMap<String, PreviewImage>,
@@ -866,7 +867,27 @@ impl ExtensionUi {
 		self.previews.clear();
 		self.enlarged = None;
 	}
+	pub(crate) fn decorations(&self) -> crate::plugin_decorations::SharedCache {
+		self.decorations.clone()
+	}
+	/// Stores a plugin's validated decoration for a loaded message ID.
+	pub fn decorate_message(
+		&mut self,
+		plugin: &str,
+		message_id: &str,
+		decoration: extensions::Decoration,
+	) {
+		let Ok(message) = message_id.parse::<model::Id>() else {
+			return;
+		};
+		if let Ok(mut cache) = self.decorations.lock() {
+			let _ = cache.insert(plugin, message.0, decoration);
+		}
+	}
 	pub fn remove_runtime(&mut self, id: &str) {
+		if let Ok(mut cache) = self.decorations.lock() {
+			cache.remove_plugin(id);
+		}
 		if self.result.as_ref().is_some_and(|result| result.id == id) {
 			self.result = None;
 		}
@@ -2753,6 +2774,7 @@ fn capability_label(capability: Capability) -> &'static str {
 		Capability::MessageDetails => {
 			"Read loaded message replies, mentions, attachment metadata and reactions"
 		}
+		Capability::Decorations => "Add badges and text beside messages",
 		Capability::Relationships => "Read my loaded friends, requests, blocked and ignored users",
 		Capability::Timeline => "Read loaded messages in the active conversation",
 		Capability::Members => "Read loaded members of the active conversation",

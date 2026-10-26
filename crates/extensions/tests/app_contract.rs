@@ -55,6 +55,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Capability::DataEvents,
 		Capability::MessageDetails,
 		Capability::Relationships,
+		Capability::Decorations,
 	]);
 	manifest.actions = [
 		Surface::Message,
@@ -553,6 +554,40 @@ fn local_effects_require_matching_grants_and_cannot_run_in_background() {
 }
 
 #[test]
+fn decorations_need_their_grant_and_a_message_event_and_round_trip_through_the_sdk() {
+	let decoration = sdk::Decoration {
+		badges: vec![sdk::Badge {
+			text: "BOT".into(),
+			..Default::default()
+		}],
+		..Default::default()
+	};
+	let wire = sdk::DecorationOutput {
+		decoration: Some(decoration),
+		..Default::default()
+	};
+	let output: Output = serde_json::from_slice(&serde_json::to_vec(&wire).unwrap()).unwrap();
+	assert_eq!(output.decoration.as_ref().unwrap().badges[0].text, "BOT");
+	let input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	let mut manifest = test_manifest(vec![Capability::MessageEvents]);
+	manifest.actions[0].surface = Surface::MessageEvent;
+	assert!(matches!(
+		output.validate(&manifest, &input),
+		Err(Error::Capability)
+	));
+	manifest.capabilities.push(Capability::Decorations);
+	output.validate(&manifest, &input).unwrap();
+	manifest.actions[0].surface = Surface::Panel;
+	assert!(matches!(
+		output.validate(&manifest, &input),
+		Err(Error::Capability)
+	));
+}
+
+#[test]
 fn app_events_are_unique_granted_and_have_no_direct_conversation_context() {
 	let mut manifest = test_manifest(vec![
 		Capability::AppEvents,
@@ -912,9 +947,9 @@ fn discovery_is_forward_tolerant_and_does_not_change_legacy_input() {
 	supported.validate().unwrap();
 	assert!(host.supports("rich_presence"));
 	assert!(host.supports("api_proxy"));
-	assert_eq!(caps.len(), 53);
+	assert_eq!(caps.len(), 54);
 	assert_eq!(HostInfo::current().app_events.len(), 21);
-	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 53);
+	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 54);
 }
 
 #[test]
