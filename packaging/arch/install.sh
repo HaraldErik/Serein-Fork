@@ -57,4 +57,10 @@ if [ -z "$package" ]; then
 fi
 echo ">> Installing $package with pacman"
 sudo pacman -U --noconfirm "$package"
+echo ">> Refreshing desktop entries, icons and the KDE application menu"
+sudo update-desktop-database /usr/share/applications 2>/dev/null || true
+sudo gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+for rebuild in kbuildsycoca6 kbuildsycoca5; do
+  command -v "$rebuild" >/dev/null && { "$rebuild" --noincremental >/dev/null 2>&1 || true; break; }
+done
 echo "Done. Start Serein from your app menu or run: serein"
