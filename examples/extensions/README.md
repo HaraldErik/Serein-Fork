@@ -521,3 +521,7 @@ uses `ApiProxyOutput.api_proxy` and the `api_proxy` capability, with optional `s
 Only panel/activation actions are allowed; this narrow device-wide scope works
 before login and survives account logout. It routes only Discord REST requests,
 without exposing account data, credentials, calls, Gateway or media access.
+
+## Decorations example
+
+[Link Badges](link-badges/src/lib.rs) shows the preview `decorations` capability: a `message_event` handler returns a `DecorationOutput` with badges that Serein paints beside the author name. Build and package it like the other examples (`link_badges.wasm`, then `pack.py`).
