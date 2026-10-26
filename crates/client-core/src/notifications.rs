@@ -867,6 +867,7 @@ impl State {
 		alert_text(&output, 160, 512)
 	}
 
+	/// Observe message notifications, updating notification badges and mention tracking.
 	pub(crate) fn observe_notification(&mut self, message: &Message) {
 		if !model::valid_mention_roles(&message.mention_roles) {
 			return;
@@ -1053,6 +1054,7 @@ mod tests {
 							tertiary_color: None,
 							position: 0,
 							hoist: false,
+							managed: false,
 						},
 						p::Role {
 							id: Id(10),
@@ -1063,6 +1065,7 @@ mod tests {
 							tertiary_color: None,
 							position: 0,
 							hoist: false,
+							managed: false,
 						},
 						p::Role {
 							id: Id(11),
@@ -1073,6 +1076,7 @@ mod tests {
 							tertiary_color: None,
 							position: 0,
 							hoist: false,
+							managed: false,
 						},
 					]),
 					member: Some(p::Member {
