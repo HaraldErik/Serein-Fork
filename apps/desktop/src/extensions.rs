@@ -27,7 +27,7 @@ const MAX_PACKAGE: usize = 16 * 1024 * 1024;
 const MAX_RECORD: usize = MAX_PACKAGE + 64 * 1024;
 const MAX_CATALOG: usize = 1024 * 1024;
 const MAX_STORAGE: usize = 1024 * 1024;
-const MAX_PER_SCOPE: usize = 8;
+const MAX_PER_SCOPE: usize = 64;
 const MAX_ACCOUNTS: usize = 8;
 const MAX_QUEUE: usize = 4;
 
@@ -970,7 +970,7 @@ fn install_stored(
 	}
 	if !directory.exists() && count_directories(&parent)? >= MAX_PER_SCOPE {
 		return Err(
-			"Disable an extension first; each scope allows eight installed extensions".into(),
+			"Disable an extension first; each scope allows 64 installed extensions".into(),
 		);
 	}
 	if stored.package.manifest.kind == ExtensionKind::Plugin

@@ -413,7 +413,7 @@ serein/
 - **Token Protection:** Tokens use the native OS credential store by default (macOS Keychain, Windows Credential Manager, Linux Secret Service). An explicit Storage setting allows private, bounded plaintext files when OS saving fails; disabling it deletes those secret files. Active tokens remain redacted in memory.
 - **Local Cache Bounds:** SQLite databases store recent channel history, drafts, settings, diagnostics, and image preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
 - **Sanitary Logout:** Executing an explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
-- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons.
+- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons. Planned plugin network access (see [Plugin API v2](docs/plugin-api-v2.md)) is pull-only HTTPS GET to user-approved hosts; Serein never uploads data to a service of its own.
 - **Platform Integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays.
 
 For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
@@ -431,6 +431,7 @@ For full details, review the [Storage Policy](docs/storage-policy.md) and [Threa
 - [Voice Architecture & Procedure](docs/voice.md)
 - [Design Tokens & UI Styling](docs/design.md)
 - [Extensions & Plugin Architecture](docs/extensions.md)
+- [Plugin API v2 design (proposal)](docs/plugin-api-v2.md)
 - [Extension SDK Creator Wiki](https://github.com/ViceVerse-cz/Serein/wiki)
 - [SDK Examples and Offline Authoring Guide](examples/extensions/README.md)
 - [Theme API Specification](docs/theme-api.md)
