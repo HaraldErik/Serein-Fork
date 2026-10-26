@@ -33,10 +33,19 @@ echo ">> Installing build dependencies"
 sudo pacman -S --needed --noconfirm base-devel cmake pkgconf curl ca-certificates git tar gzip xz \
   python coreutils desktop-file-utils file gtk4 webkitgtk-6.0 fontconfig libxkbcommon \
   libxkbcommon-x11 wayland libx11 libxi libxrandr libxcursor vulkan-headers vulkan-icd-loader \
-  alsa-lib libpulse gstreamer gst-plugins-base-libs gst-plugins-good libarchive rustup
+  alsa-lib libpulse gstreamer gst-plugins-base-libs gst-plugins-good libarchive
+
+# rustup and the `rust` package conflict on Arch: keep whichever is already installed.
+if ! command -v rustup >/dev/null && ! command -v cargo >/dev/null; then
+  sudo pacman -S --needed --noconfirm rustup
+fi
 
 echo ">> Preparing the pinned Rust toolchain"
-rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install --profile minimal
+if command -v rustup >/dev/null; then
+  rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install --profile minimal
+else
+  echo "Using system Rust ($(rustc --version)); the repo pins $(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml) and only rustup can fetch it."
+fi
 
 echo ">> Building (this takes a while)"
 cargo xtask package --format arch
