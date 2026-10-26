@@ -24,6 +24,14 @@ v1 plugins only answer a user action or app event with one JSON result. They can
 - Each call still gets a fresh, fuel- and memory-limited Wasm instance, freed afterwards.
   This is the main reason plugins cost almost no resident RAM.
 
+## Implemented so far
+
+- `decorations` capability. A `message_event` handler returns `decoration` (SDK:
+  `DecorationOutput`); the host validates it, stores it in the bounded cache and the timeline
+  paints badges/prefix/suffix beside the author name in the normal (non-compact) layout.
+- Not yet: compact layout, user/server decorations, blur/collapse/hide, and a plugin
+  invocation for messages that were already loaded before the plugin was enabled.
+
 ## New plugin surfaces
 
 | Surface | What the plugin returns | How it stays cheap |
