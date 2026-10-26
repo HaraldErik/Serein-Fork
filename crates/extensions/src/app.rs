@@ -1513,8 +1513,9 @@ impl AudioSettingsPatch {
 		Ok(())
 	}
 }
+/// Participant and stream playback go up to 400% (Volume Booster); device gains stay at 200%.
 fn audio_patch(volume: Option<u16>, muted: Option<bool>) -> Result<(), Error> {
-	if (volume.is_none() && muted.is_none()) || volume.is_some_and(|value| value > 200) {
+	if (volume.is_none() && muted.is_none()) || volume.is_some_and(|value| value > 400) {
 		return Err(Error::Invalid);
 	}
 	Ok(())
