@@ -68,6 +68,7 @@ impl HostInfo {
 				Capability::MessageDetails,
 				Capability::Relationships,
 				Capability::Decorations,
+				Capability::Network,
 			],
 			app_events: &[
 				AppEventKind::Ready,

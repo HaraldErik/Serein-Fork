@@ -76,6 +76,42 @@ fn check_text_replace(name: &str, package: &Package) {
 	println!("{name}: before_send rewrite validated in the host sandbox");
 }
 
+fn check_github_zen(name: &str, package: &Package) {
+	package.validate().expect("network package is valid");
+	let ask = Invocation {
+		action: "fetch".into(),
+		..Default::default()
+	};
+	let output = invoke(package, &ask).expect("fetch request succeeds");
+	output
+		.validate(&package.manifest, &ask)
+		.expect("fetch request is accepted");
+	let request = output.fetch.expect("a fetch is requested");
+	let reply = Invocation {
+		action: "fetched".into(),
+		fetch_result: Some(Box::new(extensions::FetchResult {
+			id: request.id,
+			url: request.url,
+			body: Some("Design for failure.".into()),
+			error: None,
+		})),
+		..Default::default()
+	};
+	reply
+		.validate(&package.manifest)
+		.expect("fetch result input is valid");
+	let output = invoke(package, &reply).expect("fetch result succeeds");
+	output
+		.validate(&package.manifest, &reply)
+		.expect("fetch result output is accepted");
+	assert_eq!(
+		output.storage.as_deref(),
+		Some("Design for failure."),
+		"{name}"
+	);
+	println!("{name}: fetch request and result validated in the host sandbox");
+}
+
 fn check_fun_commands(name: &str, package: &Package) {
 	package.validate().expect("command package is valid");
 	let command = Invocation {
@@ -664,6 +700,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
+	check_github_zen(
+		"github-zen/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/github-zen.serein-extension"
+		))?,
+	);
+	check_github_zen(
+		"github-zen/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/github-zen/manifest.json"),
+			&wasm_dir.join("github_zen.wasm"),
+		)?,
+	);
 	check_fun_commands(
 		"fun-commands/committed",
 		&parse_package(include_bytes!(

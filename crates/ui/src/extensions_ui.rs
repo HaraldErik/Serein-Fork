@@ -2335,9 +2335,16 @@ impl ExtensionUi {
 					ui.spacing_mut().item_spacing.y = 8.0;
 					for capability in &consent.entry.manifest.capabilities {
 						let mut granted = consent.grants.contains(capability);
-						let changed =
-							design::switch(ui, capability_label(*capability), None, &mut granted)
-								.changed();
+						// The host list is part of what the user agrees to.
+						let label = if *capability == Capability::Network {
+							format!(
+								"Download data from {} (nothing is uploaded, but those sites see the addresses requested and your IP)",
+								consent.entry.manifest.network_hosts.join(", ")
+							)
+						} else {
+							capability_label(*capability).to_owned()
+						};
+						let changed = design::switch(ui, &label, None, &mut granted).changed();
 						if changed {
 							if granted {
 								consent.grants.push(*capability);
@@ -3029,6 +3036,7 @@ fn capability_label(capability: Capability) -> &'static str {
 			"Read loaded message replies, mentions, attachment metadata and reactions"
 		}
 		Capability::Decorations => "Add badges and text beside messages",
+		Capability::Network => "Download data from the sites this plugin lists",
 		Capability::Relationships => "Read my loaded friends, requests, blocked and ignored users",
 		Capability::Timeline => "Read loaded messages in the active conversation",
 		Capability::Members => "Read loaded members of the active conversation",
@@ -3320,6 +3328,7 @@ mod tests {
 				kind: ExtensionKind::Plugin,
 				capabilities: vec![Capability::Composer],
 				actions: vec![],
+				network_hosts: Vec::new(),
 			},
 			reviewed: false,
 			sha256: "a".repeat(64),

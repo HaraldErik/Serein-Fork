@@ -56,6 +56,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Capability::MessageDetails,
 		Capability::Relationships,
 		Capability::Decorations,
+		Capability::Network,
 	]);
 	manifest.actions = [
 		Surface::Message,
@@ -67,6 +68,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::BeforeSend,
 		Surface::Command,
 		Surface::Decorate,
+		Surface::FetchResult,
 	]
 	.into_iter()
 	.enumerate()
@@ -76,6 +78,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		surface,
 	})
 	.collect();
+	manifest.network_hosts = vec!["api.example.com".into()];
 	manifest.validate().unwrap();
 	let wire = serde_json::to_value(&manifest).unwrap();
 	let authored: sdk::Manifest = serde_json::from_value(wire.clone()).unwrap();
@@ -101,6 +104,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 	theme["kind"] = serde_json::json!("theme");
 	theme.as_object_mut().unwrap().remove("capabilities");
 	theme.as_object_mut().unwrap().remove("actions");
+	theme.as_object_mut().unwrap().remove("network_hosts");
 	let theme: sdk::Manifest = serde_json::from_value(theme).unwrap();
 	assert!(theme.capabilities.is_empty() && theme.actions.is_empty());
 	let imported: Manifest = serde_json::from_value(serde_json::to_value(theme).unwrap()).unwrap();
@@ -123,6 +127,7 @@ fn test_manifest(capabilities: Vec<Capability>) -> Manifest {
 			label: "Run".into(),
 			surface: Surface::Panel,
 		}],
+		network_hosts: Vec::new(),
 	}
 }
 
@@ -598,6 +603,77 @@ fn before_send_needs_the_draft_and_may_only_rewrite_it() {
 }
 
 #[test]
+fn network_reads_only_listed_hosts_and_results_go_to_their_own_action() {
+	let mut manifest = test_manifest(vec![Capability::Network, Capability::Storage]);
+	assert!(
+		matches!(manifest.validate(), Err(Error::Capability)),
+		"network needs listed hosts"
+	);
+	manifest.network_hosts = vec!["api.example.com".into(), "api.example.com".into()];
+	assert!(manifest.validate().is_err(), "hosts are distinct");
+	manifest.network_hosts = vec!["*.example.com".into()];
+	assert!(manifest.validate().is_err(), "no wildcards");
+	manifest.network_hosts = vec!["api.example.com".into()];
+	manifest.actions.push(Action {
+		id: "fetched".into(),
+		label: "Fetched".into(),
+		surface: Surface::FetchResult,
+	});
+	manifest.validate().unwrap();
+	let input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	let fetch = |url: &str| Output {
+		fetch: Some(FetchRequest {
+			id: "zones".into(),
+			url: url.into(),
+		}),
+		..Default::default()
+	};
+	fetch("https://api.example.com/zones?u=1")
+		.validate(&manifest, &input)
+		.unwrap();
+	for url in ["https://other.example.com/", "http://api.example.com/"] {
+		assert!(fetch(url).validate(&manifest, &input).is_err(), "{url}");
+	}
+	// The result is delivered only to `fetch_result`, and that action stays passive.
+	let mut result = Invocation {
+		action: "fetched".into(),
+		..Default::default()
+	};
+	assert!(result.validate(&manifest).is_err(), "result required");
+	result.fetch_result = Some(Box::new(FetchResult {
+		id: "zones".into(),
+		url: "https://api.example.com/zones".into(),
+		body: Some("{}".into()),
+		error: None,
+	}));
+	result.validate(&manifest).unwrap();
+	Output {
+		storage: Some("{}".into()),
+		..Default::default()
+	}
+	.validate(&manifest, &result)
+	.unwrap();
+	assert!(
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		}
+		.validate(&manifest, &result)
+		.is_err()
+	);
+	let mut misplaced = input.clone();
+	misplaced.fetch_result = result.fetch_result.clone();
+	assert!(misplaced.validate(&manifest).is_err());
+	// Without the grant, a listed host is not enough.
+	let mut ungranted = test_manifest(vec![]);
+	ungranted.network_hosts = vec!["api.example.com".into()];
+	assert!(ungranted.validate().is_err());
+}
+
+#[test]
 fn decorate_batches_are_bounded_and_may_only_decorate_their_own_messages() {
 	let mut manifest = test_manifest(vec![Capability::Decorations]);
 	manifest.actions[0].surface = Surface::Decorate;
@@ -1065,12 +1141,13 @@ fn discovery_is_forward_tolerant_and_does_not_change_legacy_input() {
 		label: "Events".into(),
 		surface: Surface::AppEvent,
 	});
+	supported.network_hosts = vec!["api.example.com".into()];
 	supported.validate().unwrap();
 	assert!(host.supports("rich_presence"));
 	assert!(host.supports("api_proxy"));
-	assert_eq!(caps.len(), 54);
+	assert_eq!(caps.len(), 55);
 	assert_eq!(HostInfo::current().app_events.len(), 21);
-	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 54);
+	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 55);
 }
 
 #[test]

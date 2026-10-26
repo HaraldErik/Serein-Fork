@@ -19,6 +19,19 @@ release. Catalog review and hashes do not eliminate host/runtime vulnerabilities
 or protect against a compromised catalog maintainer. Local extension data is
 unencrypted; same-user filesystem tampering is outside the Wasm sandbox.
 
+Plugin network access (preview `network` capability) is pull-only and host-performed.
+The manifest lists at most eight exact public hostnames, shown on the consent screen;
+a plugin returns one `fetch` (an HTTPS URL on port 443 for a listed host) and the
+extension worker re-reads the installed package's grants and hosts before requesting.
+Requests reuse the catalog downloader: no proxy, cookies, credentials or request body,
+public-IP DNS pinning, every redirect revalidated against the listed hosts, a fixed
+agent string, a 64 KiB body cap and a 15 s timeout. The bridge allows one request in
+flight and ten per minute per plugin; results go only to that plugin's passive
+`fetch_result` action, which may save storage or show a panel only when a foreground
+action started the request. Residual risks: a listed host learns the user's IP address
+and anything the plugin encodes in the URL (including granted Discord data), and its
+responses are untrusted plugin input. Serein itself still sends no telemetry.
+
 Protect session credentials, private messages, draft integrity, account isolation and platform permissions. Trust Discord as the service endpoint, but validate transport origins, lengths and response shapes. Server authorization is authoritative.
 
 Credentials are non-serializable, non-Clone, redacted, zeroized in owned Rust buffers where practical, and saved through the OS credential store by default. The explicit Storage opt-in permits bounded unencrypted login files when an OS save fails; see [storage policy](storage-policy.md). Same-user software, administrators and backups can read those files. Temporary copies exist inside HTTP/WebSocket/JS/platform engines; no universal memory-erasure claim is made. A password is never entered into a Rust form. The login bridge is limited to its own newly-created Discord webview and never searches other apps or profiles.

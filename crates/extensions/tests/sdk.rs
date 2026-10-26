@@ -14,6 +14,7 @@ fn manifest(action: &str, surface: Surface) -> Manifest {
 		Surface::AppEvent => capabilities.push(Capability::AppEvents),
 		Surface::Tick => capabilities.push(Capability::Appearance),
 		Surface::BeforeSend | Surface::Command => capabilities.push(Capability::Composer),
+		Surface::FetchResult => capabilities.push(Capability::Network),
 		Surface::Decorate => {
 			capabilities.extend([Capability::Decorations, Capability::MessageEvents])
 		}
@@ -33,6 +34,7 @@ fn manifest(action: &str, surface: Surface) -> Manifest {
 			label: action.into(),
 			surface,
 		}],
+		network_hosts: Vec::new(),
 	};
 	manifest.validate().unwrap();
 	manifest
