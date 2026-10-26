@@ -97,6 +97,7 @@ pub enum Surface {
 	MessageEvent,
 	AppEvent,
 	Tick,
+	BeforeSend,
 }
 
 /// Declared entry point; its ID arrives in `Invocation::action`.

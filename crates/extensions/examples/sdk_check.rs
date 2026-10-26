@@ -54,6 +54,28 @@ fn rebuilt(manifest: &str, path: &Path) -> Result<Package, Box<dyn std::error::E
 	})
 }
 
+fn check_text_replace(name: &str, package: &Package) {
+	package.validate().expect("text replace package is valid");
+	let send = Invocation {
+		action: "send".into(),
+		composer: Some("teh end".into()),
+		storage: Some("teh=the".into()),
+		..Default::default()
+	};
+	send.validate(&package.manifest)
+		.expect("before_send input is valid");
+	let output = invoke(package, &send).expect("before_send succeeds");
+	output
+		.validate(&package.manifest, &send)
+		.expect("before_send output is accepted");
+	assert_eq!(output.replacement.as_deref(), Some("the end"), "{name}");
+	assert!(
+		output.panel.is_empty() && output.effects.is_empty(),
+		"{name}"
+	);
+	println!("{name}: before_send rewrite validated in the host sandbox");
+}
+
 fn check_link_badges(name: &str, package: &Package) {
 	package.validate().expect("badge package is valid");
 	let event = |content: &str| Invocation {
@@ -596,6 +618,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
+	check_text_replace(
+		"text-replace/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/text-replace.serein-extension"
+		))?,
+	);
+	check_text_replace(
+		"text-replace/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/text-replace/manifest.json"),
+			&wasm_dir.join("text_replace.wasm"),
+		)?,
+	);
 	check_link_badges(
 		"link-badges/committed",
 		&parse_package(include_bytes!(

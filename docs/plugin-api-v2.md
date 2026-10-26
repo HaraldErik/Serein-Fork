@@ -32,6 +32,10 @@ v1 plugins only answer a user action or app event with one JSON result. They can
 - `presentation` (blur/collapse/hide) replaces the body with a click-to-show placeholder; the
   row-height cache includes that state so the virtualized timeline stays correct.
 - Decorations are dropped when their plugin is disabled and on every account change.
+- `before_send` surface (requires `composer`): runs every enabled send plugin in plugin-ID order when
+  the user presses Send, then sends the rewritten draft. Failure, disable, a 15-second timeout, an
+  edited draft or a conversation switch cancels the send and keeps the draft. Output is limited to
+  `replacement` and `storage`. Example: `examples/extensions/text-replace`.
 - Not yet: compact layout, user/server decorations, a real visual blur, and a plugin
   invocation for messages that were already loaded before the plugin was enabled.
 

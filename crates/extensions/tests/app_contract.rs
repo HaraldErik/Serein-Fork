@@ -64,6 +64,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::Activation,
 		Surface::MessageEvent,
 		Surface::AppEvent,
+		Surface::BeforeSend,
 	]
 	.into_iter()
 	.enumerate()
@@ -551,6 +552,47 @@ fn local_effects_require_matching_grants_and_cannot_run_in_background() {
 			Err(Error::Capability)
 		));
 	}
+}
+
+#[test]
+fn before_send_needs_the_draft_and_may_only_rewrite_it() {
+	let mut manifest = test_manifest(vec![Capability::Composer, Capability::Storage]);
+	manifest.actions[0].surface = Surface::BeforeSend;
+	manifest.validate().unwrap();
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(matches!(input.validate(&manifest), Err(Error::Capability)));
+	input.composer = Some("s/teh/the/".into());
+	input.validate(&manifest).unwrap();
+	let rewrite = Output {
+		replacement: Some("the".into()),
+		storage: Some("1".into()),
+		..Default::default()
+	};
+	rewrite.validate(&manifest, &input).unwrap();
+	for forbidden in [
+		Output {
+			panel: vec![Element::Separator],
+			..Default::default()
+		},
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		},
+		Output {
+			appearance: Some(Theme::default()),
+			..Default::default()
+		},
+	] {
+		assert!(matches!(
+			forbidden.validate(&manifest, &input),
+			Err(Error::Capability)
+		));
+	}
+	manifest.capabilities.retain(|c| *c != Capability::Composer);
+	assert!(matches!(manifest.validate(), Err(Error::Capability)));
 }
 
 #[test]

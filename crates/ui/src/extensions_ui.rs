@@ -153,6 +153,20 @@ struct PreviewImage {
 	used: u64,
 	loading: bool,
 }
+/// `before_send` plugins run one at a time on the extension worker; the composer sends the
+/// rewritten text once they all finish, or keeps the draft untouched if any step fails.
+struct SendChain {
+	generation: u64,
+	channel: Id,
+	original: String,
+	text: String,
+	remaining: std::collections::VecDeque<(String, String)>,
+	waiting: Option<String>,
+	ready: bool,
+	started: std::time::Instant,
+}
+const SEND_CHAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[derive(Default)]
 pub struct ExtensionUi {
 	pub proxy_auth: crate::proxy_auth::Form,
@@ -167,6 +181,7 @@ pub struct ExtensionUi {
 	error: Option<String>,
 	message_actions: Arc<Vec<MenuAction>>,
 	decorations: crate::plugin_decorations::SharedCache,
+	send_chain: Option<SendChain>,
 	themes: bool,
 	query: String,
 	previews: BTreeMap<String, PreviewImage>,
@@ -857,10 +872,11 @@ impl ExtensionUi {
 		};
 	}
 	pub fn reset_runtime(&mut self) {
-		// Decorations describe the previous account's messages.
+		// Decorations and pending sends describe the previous account's messages.
 		if let Ok(mut cache) = self.decorations.lock() {
 			cache.clear();
 		}
+		self.send_chain = None;
 		self.catalog_refreshing = false;
 		self.theme_editor = None;
 		self.gallery_preview = None;
@@ -888,9 +904,141 @@ impl ExtensionUi {
 			let _ = cache.insert(plugin, message.0, decoration);
 		}
 	}
+	/// Starts the enabled `before_send` plugins for the selected draft. `true` means the send
+	/// waits for them (or for an earlier run); `false` means send now.
+	pub(crate) fn start_send_hooks(&mut self, ctx: &egui::Context, state: &State) -> bool {
+		if self.send_chain.is_some() {
+			self.status = "Send plugins are still running.".into();
+			return true;
+		}
+		let Some(channel) = state.selected else {
+			return false;
+		};
+		let draft = state.drafts.get(&channel).cloned().unwrap_or_default();
+		if draft.is_empty() {
+			return false;
+		}
+		let mut hooks: Vec<_> = self
+			.entries
+			.iter()
+			.filter(|entry| entry.enabled)
+			.flat_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.filter(|action| action.surface == Surface::BeforeSend)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		if hooks.is_empty() {
+			return false;
+		}
+		hooks.sort();
+		self.send_chain = Some(SendChain {
+			generation: state.generation,
+			channel,
+			text: draft.clone(),
+			original: draft,
+			remaining: hooks.into(),
+			waiting: None,
+			ready: false,
+			started: std::time::Instant::now(),
+		});
+		self.dispatch_send_hook(ctx, state);
+		true
+	}
+	fn dispatch_send_hook(&mut self, ctx: &egui::Context, state: &State) {
+		let Some(chain) = &mut self.send_chain else {
+			return;
+		};
+		let Some((id, action)) = chain.remaining.pop_front() else {
+			chain.waiting = None;
+			chain.ready = true;
+			ctx.request_repaint();
+			return;
+		};
+		chain.waiting = Some(id.clone());
+		let invocation = Invocation {
+			action,
+			composer: Some(chain.text.clone()),
+			..Default::default()
+		};
+		let before = self.requests.len();
+		self.queue(
+			ctx,
+			ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context: ExtensionContext::capture(state, true),
+			},
+		);
+		if self.requests.len() == before {
+			self.abort_send_hooks("Send plugins are busy; your draft was kept. Press Send again.");
+		}
+	}
+	/// The plugin the send chain waits for, if any.
+	pub fn send_hook_waiting(&self) -> Option<&str> {
+		self.send_chain
+			.as_ref()
+			.and_then(|chain| chain.waiting.as_deref())
+	}
+	/// Applies one `before_send` result; a stale draft or conversation cancels the send.
+	pub fn send_hook_output(
+		&mut self,
+		ctx: &egui::Context,
+		id: &str,
+		context: &ExtensionContext,
+		replacement: Option<String>,
+		state: &State,
+	) {
+		if self.send_hook_waiting() != Some(id) {
+			return;
+		}
+		if !context.is_current(state) {
+			self.abort_send_hooks("Draft changed while send plugins ran; press Send again.");
+			return;
+		}
+		if let Some(chain) = &mut self.send_chain
+			&& let Some(text) = replacement
+		{
+			chain.text = text;
+		}
+		self.dispatch_send_hook(ctx, state);
+	}
+	pub fn abort_send_hooks(&mut self, reason: &str) {
+		if self.send_chain.take().is_some() {
+			self.status = reason.into();
+		}
+	}
+	/// The rewritten draft, once every send plugin finished for the still-current draft.
+	pub(crate) fn take_ready_send(&mut self, state: &State) -> Option<(Id, String)> {
+		let chain = self.send_chain.as_ref()?;
+		if !chain.ready {
+			if chain.started.elapsed() > SEND_CHAIN_TIMEOUT {
+				self.abort_send_hooks("A send plugin took too long; your draft was kept.");
+			}
+			return None;
+		}
+		let chain = self.send_chain.take()?;
+		if chain.generation != state.generation
+			|| state.selected != Some(chain.channel)
+			|| state.drafts.get(&chain.channel) != Some(&chain.original)
+		{
+			self.status = "Draft changed while send plugins ran; press Send again.".into();
+			return None;
+		}
+		Some((chain.channel, chain.text))
+	}
 	pub fn remove_runtime(&mut self, id: &str) {
 		if let Ok(mut cache) = self.decorations.lock() {
 			cache.remove_plugin(id);
+		}
+		if self.send_chain.as_ref().is_some_and(|chain| {
+			chain.waiting.as_deref() == Some(id)
+				|| chain.remaining.iter().any(|(hook, _)| hook == id)
+		}) {
+			self.abort_send_hooks("A send plugin was disabled; your draft was kept.");
 		}
 		if self.result.as_ref().is_some_and(|result| result.id == id) {
 			self.result = None;
@@ -3080,6 +3228,69 @@ mod tests {
 			update_manifest: None,
 		}
 	}
+	#[test]
+	fn send_plugins_run_in_order_and_never_send_a_stale_draft() {
+		let ctx = egui::Context::default();
+		let mut state = client_core::State {
+			selected: Some(Id(7)),
+			..Default::default()
+		};
+		state.drafts.insert(Id(7), "teh draft".into());
+		let mut ui = ExtensionUi::default();
+		for id in ["b.second", "a.first"] {
+			let mut plugin = entry();
+			plugin.enabled = true;
+			plugin.manifest.id = id.into();
+			plugin.manifest.actions = vec![extensions::Action {
+				id: "send".into(),
+				label: "Rewrite".into(),
+				surface: Surface::BeforeSend,
+			}];
+			ui.entries.push(plugin);
+		}
+		let invoked = |ui: &ExtensionUi| match ui.requests.last() {
+			Some(ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context,
+			}) => (id.clone(), invocation.composer.clone(), context.clone()),
+			_ => panic!("expected a send plugin invocation"),
+		};
+		assert!(ui.start_send_hooks(&ctx, &state));
+		let (id, composer, context) = invoked(&ui);
+		assert_eq!(
+			(id.as_str(), composer.as_deref()),
+			("a.first", Some("teh draft"))
+		);
+		// A result from another plugin is ignored; the chain still waits for `a.first`.
+		ui.send_hook_output(&ctx, "b.second", &context, Some("wrong".into()), &state);
+		ui.send_hook_output(&ctx, "a.first", &context, Some("the draft".into()), &state);
+		let (id, composer, context) = invoked(&ui);
+		assert_eq!(
+			(id.as_str(), composer.as_deref()),
+			("b.second", Some("the draft"))
+		);
+		assert!(ui.take_ready_send(&state).is_none());
+		ui.send_hook_output(&ctx, "b.second", &context, None, &state);
+		assert_eq!(
+			ui.take_ready_send(&state),
+			Some((Id(7), "the draft".to_owned()))
+		);
+
+		// Typing during the run cancels it and keeps the newer draft.
+		assert!(ui.start_send_hooks(&ctx, &state));
+		let (_, _, context) = invoked(&ui);
+		state.drafts.insert(Id(7), "edited meanwhile".into());
+		ui.send_hook_output(&ctx, "a.first", &context, Some("x".into()), &state);
+		assert!(ui.send_hook_waiting().is_none());
+		assert!(ui.take_ready_send(&state).is_none());
+
+		// Disabling a plugin that is part of the run cancels it as well.
+		assert!(ui.start_send_hooks(&ctx, &state));
+		ui.remove_runtime("b.second");
+		assert!(ui.send_hook_waiting().is_none());
+	}
+
 	#[test]
 	fn catalog_refresh_preserves_only_unchanged_reviewed_consent() {
 		let mut shop = ExtensionUi::default();

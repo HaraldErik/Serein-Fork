@@ -525,3 +525,7 @@ without exposing account data, credentials, calls, Gateway or media access.
 ## Decorations example
 
 [Link Badges](link-badges/src/lib.rs) shows the preview `decorations` capability: a `message_event` handler returns a `DecorationOutput` with badges that Serein paints beside the author name. Build and package it like the other examples (`link_badges.wasm`, then `pack.py`).
+
+## Send hook example
+
+[Text Replace](text-replace/src/lib.rs) shows the preview `before_send` surface: whole-word rules saved from its panel are applied to the draft when you press Send.

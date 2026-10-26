@@ -258,6 +258,8 @@ pub struct MessagingUi {
 	pub preload_on_hover: bool,
 	preload: preload::Preload,
 	pub image_share_requested: Option<(u64, Id, Vec<model::ImageShare>, String)>,
+	/// The next composer submit already ran `before_send` plugins.
+	send_hooks_applied: bool,
 	pub interaction_file_request: Option<String>,
 	interaction_components: components::Components,
 	pub verification: VerificationUi,
@@ -2774,6 +2776,11 @@ impl MessagingUi {
 		if self.upload_busy || self.image_share_requested.is_some() || !state.can_send(channel) {
 			return;
 		}
+		if !std::mem::take(&mut self.send_hooks_applied)
+			&& self.extensions.start_send_hooks(ctx, state)
+		{
+			return;
+		}
 		let draft = state.drafts.get(&channel).map_or("", String::as_str);
 		if self.selected_files().is_empty()
 			&& let Some(assets) = model::ImageShare::markdown_only(draft)
@@ -4202,6 +4209,12 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
 		let mut commands = Vec::new();
+		if let Some((channel, text)) = self.extensions.take_ready_send(state) {
+			state.drafts.insert(channel, text);
+			self.send_hooks_applied = true;
+			self.submit_composer(state, ui.ctx(), &mut commands);
+			self.send_hooks_applied = false;
+		}
 		commands.extend(cosmetics_refresh);
 		// A server joined from an invite opens as soon as the Gateway delivers it.
 		commands.extend(state.navigate_after_join());
