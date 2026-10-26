@@ -162,7 +162,12 @@ pub enum Surface {
 	Tick,
 	/// Runs when the user presses Send; may return a draft `replacement`.
 	BeforeSend,
+	/// Runs for `/<action id> arguments` typed in the composer; arguments arrive in `composer`.
+	Command,
 }
+
+/// Longest `/name` a plugin command may use.
+pub const MAX_COMMAND_NAME_BYTES: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -711,8 +716,11 @@ impl Manifest {
 				Surface::MessageEvent => Some(Capability::MessageEvents),
 				Surface::AppEvent => Some(Capability::AppEvents),
 				Surface::Tick => Some(Capability::Appearance),
-				Surface::BeforeSend => Some(Capability::Composer),
+				Surface::BeforeSend | Surface::Command => Some(Capability::Composer),
 			};
+			if action.surface == Surface::Command && action.id.len() > MAX_COMMAND_NAME_BYTES {
+				return Err(Error::Invalid);
+			}
 			if required.is_some_and(|c| !capabilities.contains(&c)) {
 				return Err(Error::Capability);
 			}
@@ -1042,8 +1050,11 @@ impl Invocation {
 		}
 		if self.selected_message.is_some() && action.surface != Surface::Message
 			|| self.composer.is_some()
-				&& !matches!(action.surface, Surface::Composer | Surface::BeforeSend)
-			|| self.composer.is_none() && action.surface == Surface::BeforeSend
+				&& !matches!(
+					action.surface,
+					Surface::Composer | Surface::BeforeSend | Surface::Command
+				) || self.composer.is_none()
+			&& matches!(action.surface, Surface::BeforeSend | Surface::Command)
 			|| self.tick_ms.is_some() && action.surface != Surface::Tick
 			|| self.tick_ms.is_none() && action.surface == Surface::Tick
 		{

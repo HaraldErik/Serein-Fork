@@ -13,7 +13,7 @@ fn manifest(action: &str, surface: Surface) -> Manifest {
 		Surface::MessageEvent => capabilities.push(Capability::MessageEvents),
 		Surface::AppEvent => capabilities.push(Capability::AppEvents),
 		Surface::Tick => capabilities.push(Capability::Appearance),
-		Surface::BeforeSend => capabilities.push(Capability::Composer),
+		Surface::BeforeSend | Surface::Command => capabilities.push(Capability::Composer),
 	}
 	let manifest = Manifest {
 		api_version: extensions::API_VERSION,

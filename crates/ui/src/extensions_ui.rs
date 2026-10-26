@@ -977,6 +977,75 @@ impl ExtensionUi {
 			self.abort_send_hooks("Send plugins are busy; your draft was kept. Press Send again.");
 		}
 	}
+	/// Runs an enabled plugin's `/name arguments` command. `false` when no plugin owns `name`.
+	/// The plugin's `replacement` becomes the new draft; the user still presses Send.
+	pub(crate) fn run_plugin_command(&mut self, ctx: &egui::Context, state: &State) -> bool {
+		let Some(draft) = state
+			.selected
+			.and_then(|channel| state.drafts.get(&channel))
+		else {
+			return false;
+		};
+		let Some(rest) = draft.strip_prefix('/') else {
+			return false;
+		};
+		let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+		let (name, arguments) = (&rest[..end], rest[end..].trim_start());
+		let mut owners: Vec<_> = self
+			.entries
+			.iter()
+			.filter(|entry| entry.enabled)
+			.filter(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.any(|action| action.surface == Surface::Command && action.id == name)
+			})
+			.map(|entry| entry.manifest.id.clone())
+			.collect();
+		owners.sort();
+		let Some(id) = owners.into_iter().next() else {
+			return false;
+		};
+		let invocation = Invocation {
+			action: name.to_owned(),
+			composer: Some(arguments.to_owned()),
+			..Default::default()
+		};
+		self.status = format!("Running /{name}…");
+		self.queue(
+			ctx,
+			ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context: ExtensionContext::capture(state, true),
+			},
+		);
+		true
+	}
+	/// Puts a command's `replacement` in the draft that ran it, within the draft budget.
+	pub fn apply_command_output(
+		&mut self,
+		state: &mut State,
+		context: &ExtensionContext,
+		replacement: String,
+	) {
+		let Some(channel) = context.channel.filter(|_| context.is_current(state)) else {
+			self.status =
+				"Command result discarded because the conversation or draft changed.".into();
+			return;
+		};
+		let old = state.drafts.get(&channel).map_or(0, String::capacity);
+		if state.draft_bytes().saturating_sub(old) + replacement.len()
+			> client_core::MAX_DRAFT_BYTES
+		{
+			self.status = "Command result exceeds the draft budget; your draft was kept.".into();
+			return;
+		}
+		state.drafts.insert(channel, replacement);
+		self.status = "Command result is in your draft. Press Send to post it.".into();
+	}
 	/// The plugin the send chain waits for, if any.
 	pub fn send_hook_waiting(&self) -> Option<&str> {
 		self.send_chain
@@ -3289,6 +3358,47 @@ mod tests {
 		assert!(ui.start_send_hooks(&ctx, &state));
 		ui.remove_runtime("b.second");
 		assert!(ui.send_hook_waiting().is_none());
+	}
+
+	#[test]
+	fn plugin_commands_fill_the_draft_only_while_it_is_unchanged() {
+		let ctx = egui::Context::default();
+		let mut state = client_core::State {
+			selected: Some(Id(7)),
+			..Default::default()
+		};
+		let mut ui = ExtensionUi::default();
+		for (id, enabled) in [("b.owner", true), ("a.disabled", false)] {
+			let mut plugin = entry();
+			plugin.enabled = enabled;
+			plugin.manifest.id = id.into();
+			plugin.manifest.actions = vec![extensions::Action {
+				id: "mock".into(),
+				label: "Mock".into(),
+				surface: Surface::Command,
+			}];
+			ui.entries.push(plugin);
+		}
+		state.drafts.insert(Id(7), "/unknown hi".into());
+		assert!(!ui.run_plugin_command(&ctx, &state));
+		state.drafts.insert(Id(7), "/mock  hello world".into());
+		assert!(ui.run_plugin_command(&ctx, &state));
+		let Some(ExtensionRequest::Invoke {
+			id,
+			invocation,
+			context,
+		}) = ui.requests.pop()
+		else {
+			panic!("expected a command invocation");
+		};
+		assert_eq!(id, "b.owner", "disabled plugins never own a command");
+		assert_eq!(invocation.action, "mock");
+		assert_eq!(invocation.composer.as_deref(), Some("hello world"));
+		ui.apply_command_output(&mut state, &context, "hElLo WoRlD".into());
+		assert_eq!(state.drafts[&Id(7)], "hElLo WoRlD");
+		// A second result for the old draft is stale and must not overwrite newer text.
+		ui.apply_command_output(&mut state, &context, "late".into());
+		assert_eq!(state.drafts[&Id(7)], "hElLo WoRlD");
 	}
 
 	#[test]

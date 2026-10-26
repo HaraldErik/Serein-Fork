@@ -65,6 +65,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::MessageEvent,
 		Surface::AppEvent,
 		Surface::BeforeSend,
+		Surface::Command,
 	]
 	.into_iter()
 	.enumerate()

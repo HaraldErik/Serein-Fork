@@ -160,6 +160,7 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
 | `before_send` | Preview: you press **Send** with text in the draft | `replacement` text that is sent instead |
+| `command` | Preview: you type `/<action id> arguments` and press Enter | `replacement` placed in the draft, and/or a panel or proposal |
 
 Event surfaces cannot show panels or propose actions; they stay passive.
 
@@ -244,6 +245,24 @@ How the host runs them:
 
 Complete tested example with a settings panel: [`examples/extensions/text-replace`](../examples/extensions/text-replace/src/lib.rs).
 
+## Slash commands (preview)
+
+An action with `"surface": "command"` (requires `composer`) becomes a slash command named after its
+action `id` (lowercase letters, digits and `-`, at most 32 characters). Typing `/mock hello` and
+pressing Enter runs the plugin with `action = "mock"` and `composer = "hello"`.
+
+- A returned `replacement` **replaces the draft**; you review it and press Enter again to send. A
+  command never sends a message by itself.
+- Panels and Apply proposals work as for other foreground actions, so a command can also open a tool.
+- Built-in commands (`/me`, `/shrug`, `/gif`, `/msg`, `/spoiler`, `/sticker`, `/tableflip`, `/unflip`)
+  and server application commands you pick from the list take priority. If two plugins declare the
+  same name, the one with the lowest plugin ID wins.
+- If you edit the draft or switch conversation before the result arrives, it is discarded.
+- Plugin commands are not yet listed in the slash-command popup; type the name yourself.
+
+Example: [`examples/extensions/fun-commands`](../examples/extensions/fun-commands/src/lib.rs)
+(`/mock`, `/reverse`, `/upper`).
+
 ## Publishing and sharing
 
 - Keep source and license public. Share the `.serein-extension` file, or add it to the catalog under
@@ -253,7 +272,7 @@ Complete tested example with a settings panel: [`examples/extensions/text-replac
 
 ## What is planned
 
-Decorations and send hooks are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
+Decorations, send hooks and slash commands are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
 items, settings pages), send hooks and commands, timers, storage with more keys, pull-only network
 access to hosts you approve, and limited auto-apply for low-risk actions. Plugins that depend on
 patching Discord's web client have no equivalent in a native client.

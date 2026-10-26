@@ -36,6 +36,10 @@ v1 plugins only answer a user action or app event with one JSON result. They can
   the user presses Send, then sends the rewritten draft. Failure, disable, a 15-second timeout, an
   edited draft or a conversation switch cancels the send and keeps the draft. Output is limited to
   `replacement` and `storage`. Example: `examples/extensions/text-replace`.
+- `command` surface (requires `composer`): `/<action id> arguments` typed in the composer runs the
+  plugin; a `replacement` becomes the draft (never sent automatically) and panels/proposals are
+  shown as usual. Built-ins and server commands win name clashes. Example:
+  `examples/extensions/fun-commands`. Not yet listed in the slash popup.
 - Not yet: compact layout, user/server decorations, a real visual blur, and a plugin
   invocation for messages that were already loaded before the plugin was enabled.
 
