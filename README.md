@@ -137,7 +137,7 @@ permissions it asks for, enable it. The catalog tab lists reviewed packages. Dis
 package and its data.
 
 **What they can do (today):** show native panels, read data Serein already loaded (selected channel,
-messages, members, voice state…), edit your draft, **rewrite messages when you press Send**, save one small value, react to message and app
+messages, members, voice state…), edit your draft, **rewrite messages when you press Send**, add **`/slash` commands**, save one small value, react to message and app
 events, change appearance, add a custom presence, **put badges and text beside message authors**, and
 *propose* actions (send, edit, react, navigate, moderate…) that run only after you click **Apply**.
 

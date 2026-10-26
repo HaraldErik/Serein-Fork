@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fun-commands"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serein-extension-sdk",
+]
+
+[[package]]
 name = "guild-inspector"
 version = "1.0.0"
 dependencies = [

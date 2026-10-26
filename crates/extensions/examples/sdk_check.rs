@@ -76,6 +76,24 @@ fn check_text_replace(name: &str, package: &Package) {
 	println!("{name}: before_send rewrite validated in the host sandbox");
 }
 
+fn check_fun_commands(name: &str, package: &Package) {
+	package.validate().expect("command package is valid");
+	let command = Invocation {
+		action: "mock".into(),
+		composer: Some("hi you".into()),
+		..Default::default()
+	};
+	command
+		.validate(&package.manifest)
+		.expect("command input is valid");
+	let output = invoke(package, &command).expect("command succeeds");
+	output
+		.validate(&package.manifest, &command)
+		.expect("command output is accepted");
+	assert_eq!(output.replacement.as_deref(), Some("Hi YoU"), "{name}");
+	println!("{name}: command result validated in the host sandbox");
+}
+
 fn check_link_badges(name: &str, package: &Package) {
 	package.validate().expect("badge package is valid");
 	let event = |content: &str| Invocation {
@@ -618,6 +636,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
+	check_fun_commands(
+		"fun-commands/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/fun-commands.serein-extension"
+		))?,
+	);
+	check_fun_commands(
+		"fun-commands/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/fun-commands/manifest.json"),
+			&wasm_dir.join("fun_commands.wasm"),
+		)?,
+	);
 	check_text_replace(
 		"text-replace/committed",
 		&parse_package(include_bytes!(

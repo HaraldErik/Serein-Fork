@@ -923,7 +923,7 @@ impl Bridge {
 								decoration.clone(),
 							);
 						}
-						let before_send = self
+						let surface = self
 							.installed
 							.iter()
 							.find(|entry| entry.manifest.id == id)
@@ -934,8 +934,21 @@ impl Bridge {
 									.iter()
 									.find(|action| action.id == invocation.action)
 							})
-							.is_some_and(|action| action.surface == Surface::BeforeSend);
-						if before_send {
+							.map(|action| action.surface);
+						let mut output = output;
+						if surface == Some(Surface::Command)
+							&& let Some(replacement) = output.replacement.take()
+						{
+							messaging
+								.extensions
+								.apply_command_output(state, &context, replacement);
+						}
+						if surface == Some(Surface::Command)
+							&& output.panel.is_empty()
+							&& output.effects.is_empty()
+						{
+							// Nothing left to show; the draft already carries the result.
+						} else if surface == Some(Surface::BeforeSend) {
 							messaging.extensions.send_hook_output(
 								ctx,
 								&id,

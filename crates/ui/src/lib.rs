@@ -3889,7 +3889,8 @@ impl MessagingUi {
                                     state.status = "Edit kept. Wait for your current message and connection, and enter nonempty text.";
                                 }
                             } else if self.send_application_command(state, channel, commands)
-                                || self.handle_builtin_slash(state, channel, ctx, commands) {
+                                || self.handle_builtin_slash(state, channel, ctx, commands)
+                                || (self.editing.is_none() && self.extensions.run_plugin_command(ctx, state)) {
                             } else if oversized {
                                 self.toasts.push(design::Level::Error, oversized_text(upload_limit));
                             } else if !self.upload_busy && !(state.demo && self.attachment.is_some()) {

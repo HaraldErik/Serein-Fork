@@ -529,3 +529,7 @@ without exposing account data, credentials, calls, Gateway or media access.
 ## Send hook example
 
 [Text Replace](text-replace/src/lib.rs) shows the preview `before_send` surface: whole-word rules saved from its panel are applied to the draft when you press Send.
+
+## Slash command example
+
+[Fun Commands](fun-commands/src/lib.rs) shows the preview `command` surface: `/mock`, `/reverse` and `/upper` put their result in the draft for you to send.
