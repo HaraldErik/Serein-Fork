@@ -9,6 +9,7 @@ mod jitter;
 mod mixer;
 pub mod screen;
 mod stream_playout;
+pub use stream_playout::{MAX_PLAYBACK_PERCENT, soft_limit};
 mod teardown;
 mod timer;
 mod transport;
@@ -34,7 +35,7 @@ pub struct Controls {
 	/// Zero means off; a new value invalidates frames from the previous camera instance.
 	pub camera: u64,
 	pub deafened: bool,
-	/// Session-only playback percentages (0–200); zero user IDs are unused.
+	/// Session-only playback percentages (0–[`MAX_PLAYBACK_PERCENT`]); zero user IDs are unused.
 	pub user_volumes: [(u64, u16); 64],
 	/// Watched stream playback percentage, independently muted with zero.
 	pub stream_volume: u16,

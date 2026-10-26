@@ -149,7 +149,7 @@ impl AppPreferences {
 				.is_none_or(|value| value.custom.is_valid())
 			&& self.expanded_folders.len() <= 256
 			&& self.user_volumes.len() <= 64
-			&& self.user_volumes.iter().all(|(_, volume)| *volume <= 200)
+			&& self.user_volumes.iter().all(|(_, volume)| *volume <= 400)
 			&& self.muted_users.len() <= 64
 			&& self.keybinds.is_valid()
 			&& self.image_cache.is_valid()

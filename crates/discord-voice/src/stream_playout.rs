@@ -29,14 +29,31 @@ impl Playout {
 			return None;
 		}
 		let mut frame = self.pending.pop_front()?;
-		let gain = f32::from(volume.min(200)) / 100.0;
+		let gain = f32::from(volume.min(MAX_PLAYBACK_PERCENT)) / 100.0;
 		for sample in &mut frame {
 			*sample = if sample.is_finite() {
-				(*sample * gain).clamp(-1.0, 1.0)
+				soft_limit(*sample * gain)
 			} else {
 				0.0
 			};
 		}
 		Some(frame)
+	}
+}
+
+/// Highest local playback volume for a participant or a watched stream (Volume Booster).
+pub const MAX_PLAYBACK_PERCENT: u16 = 400;
+
+/// Keeps a mixed sample inside -1..=1. Samples below the knee pass unchanged; louder ones are
+/// bent smoothly towards full scale, so boosted voices distort far less than hard clipping.
+#[inline]
+pub fn soft_limit(sample: f32) -> f32 {
+	const KNEE: f32 = 0.8;
+	const ROOM: f32 = 1.0 - KNEE;
+	let magnitude = sample.abs();
+	if magnitude <= KNEE {
+		sample
+	} else {
+		(KNEE + ROOM * ((magnitude - KNEE) / ROOM).tanh()).copysign(sample)
 	}
 }
