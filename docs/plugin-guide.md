@@ -288,7 +288,8 @@ pressing Enter runs the plugin with `action = "mock"` and `composer = "hello"`.
   and server application commands you pick from the list take priority. If two plugins declare the
   same name, the one with the lowest plugin ID wins.
 - If you edit the draft or switch conversation before the result arrives, it is discarded.
-- Plugin commands are not yet listed in the slash-command popup; type the name yourself.
+- Enabled plugins' commands appear in the slash-command suggestions as "Plugin · <name>", using the
+  action `label` as the description.
 
 Example: [`examples/extensions/fun-commands`](../examples/extensions/fun-commands/src/lib.rs)
 (`/mock`, `/reverse`, `/upper`).
