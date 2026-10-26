@@ -167,6 +167,14 @@ struct SendChain {
 }
 const SEND_CHAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// A slash command an enabled plugin offers, for the composer's suggestion list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PluginCommand {
+	pub name: String,
+	pub description: String,
+	pub plugin: String,
+}
+
 #[derive(Default)]
 pub struct ExtensionUi {
 	pub proxy_auth: crate::proxy_auth::Form,
@@ -180,6 +188,7 @@ pub struct ExtensionUi {
 	result: Option<ResultPanel>,
 	error: Option<String>,
 	message_actions: Arc<Vec<MenuAction>>,
+	commands: Arc<Vec<PluginCommand>>,
 	decorations: crate::plugin_decorations::SharedCache,
 	send_chain: Option<SendChain>,
 	themes: bool,
@@ -485,6 +494,9 @@ impl ExtensionUi {
 			self.theme_editor = Some(editor);
 		}
 	}
+	pub(crate) fn plugin_commands(&self) -> Arc<Vec<PluginCommand>> {
+		self.commands.clone()
+	}
 	pub fn set_entries(&mut self, entries: Vec<ExtensionEntry>) {
 		if self.consent.as_ref().is_some_and(|consent| {
 			consent.entry.reviewed
@@ -508,6 +520,27 @@ impl ExtensionUi {
 						== new.cover_image.as_ref().map(Arc::as_ptr))
 		});
 		self.entries = entries;
+		// The lowest plugin ID owns a name, matching `run_plugin_command`.
+		let mut enabled: Vec<_> = self.entries.iter().filter(|entry| entry.enabled).collect();
+		enabled.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+		let mut commands: Vec<PluginCommand> = Vec::new();
+		for entry in enabled {
+			for action in entry
+				.manifest
+				.actions
+				.iter()
+				.filter(|action| action.surface == Surface::Command)
+			{
+				if !commands.iter().any(|known| known.name == action.id) {
+					commands.push(PluginCommand {
+						name: action.id.clone(),
+						description: action.label.clone(),
+						plugin: entry.manifest.name.clone(),
+					});
+				}
+			}
+		}
+		self.commands = Arc::new(commands);
 		self.message_actions = Arc::new(
 			self.entries
 				.iter()

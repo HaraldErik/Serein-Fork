@@ -39,7 +39,7 @@ v1 plugins only answer a user action or app event with one JSON result. They can
 - `command` surface (requires `composer`): `/<action id> arguments` typed in the composer runs the
   plugin; a `replacement` becomes the draft (never sent automatically) and panels/proposals are
   shown as usual. Built-ins and server commands win name clashes. Example:
-  `examples/extensions/fun-commands`. Not yet listed in the slash popup.
+  `examples/extensions/fun-commands`. Listed in the slash suggestions next to the built-ins.
 - `decorate` surface (requires `decorations` + `message_events`): the host offers up to 32 loaded
   messages (48 KiB of text) of the selected conversation whenever that set changes, through the same
   bounded, rate-limited event queue; the plugin returns per-message `decorations` whose IDs must come

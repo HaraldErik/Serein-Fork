@@ -3314,6 +3314,7 @@ impl MessagingUi {
 			&& !self.ime_active
 			&& !ime_this_frame
 			&& ctx.memory(|m| m.has_focus(composer_id));
+		self.slash_commands.plugin_commands = self.extensions.plugin_commands();
 		self.slash_commands.refresh(
 			state,
 			channel,
@@ -3808,7 +3809,8 @@ impl MessagingUi {
                         let slash_preview = false;
                         #[cfg(feature = "demo")]
                         let slash_preview = state.demo && self.preview_slash_commands;
-                        self.slash_commands.refresh(state, channel, draft,
+                        self.slash_commands.plugin_commands = self.extensions.plugin_commands();
+		self.slash_commands.refresh(state, channel, draft,
                             !editing_here && keyboard_enabled && !self.ime_active && !ime_this_frame
                                 && (output.response.has_focus() || suggestion_pointer || self.slash_commands.active.is_some() || slash_preview));
                         if let Some(pick) = self.slash_commands.show(ui, composer_anchor, state, channel, &mut self.avatars)
