@@ -1,0 +1,28 @@
+name: Build Linux packages on push
+
+# Rebuilds the deb, rpm, Arch package, AppImage and Flatpak whenever code changes.
+# Results are uploaded as workflow artifacts (14 days) by linux-packages.yml.
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE-*'
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+
+concurrency:
+  group: build-on-push-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    uses: ./.github/workflows/linux-packages.yml
+    with:
+      release: false
+      tag: development
