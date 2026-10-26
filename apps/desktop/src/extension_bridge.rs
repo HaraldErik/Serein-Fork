@@ -923,7 +923,29 @@ impl Bridge {
 								decoration.clone(),
 							);
 						}
-						if invocation.message_event.is_none() && invocation.app_event.is_none() {
+						let before_send = self
+							.installed
+							.iter()
+							.find(|entry| entry.manifest.id == id)
+							.and_then(|entry| {
+								entry
+									.manifest
+									.actions
+									.iter()
+									.find(|action| action.id == invocation.action)
+							})
+							.is_some_and(|action| action.surface == Surface::BeforeSend);
+						if before_send {
+							messaging.extensions.send_hook_output(
+								ctx,
+								&id,
+								&context,
+								output.replacement.clone(),
+								state,
+							);
+						} else if invocation.message_event.is_none()
+							&& invocation.app_event.is_none()
+						{
 							messaging
 								.extensions
 								.present_output(id, invocation, context, output, state);
@@ -1410,6 +1432,23 @@ impl Bridge {
 			}
 		}
 		self.schedule_ticks(&account, state.generation, ctx, messaging);
+		// A failed, cancelled or discarded send plugin must not leave the composer waiting.
+		if let Some(waiting) = messaging.extensions.send_hook_waiting().map(str::to_owned)
+			&& !self.pending.values().any(|pending| {
+				pending
+					.invocation
+					.as_ref()
+					.is_some_and(|(id, input, _)| *id == waiting && input.composer.is_some())
+			}) && !messaging
+			.extensions
+			.requests
+			.iter()
+			.any(|request| matches!(request, ExtensionRequest::Invoke { id, .. } if *id == waiting))
+		{
+			messaging.extensions.abort_send_hooks(
+				"A send plugin did not finish; your draft was kept. Press Send to try again.",
+			);
+		}
 	}
 	fn schedule_ticks(
 		&mut self,

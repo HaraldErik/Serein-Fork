@@ -160,6 +160,8 @@ pub enum Surface {
 	AppEvent,
 	/// Host-scheduled appearance update. Each call is a fresh Wasm invocation.
 	Tick,
+	/// Runs when the user presses Send; may return a draft `replacement`.
+	BeforeSend,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -709,6 +711,7 @@ impl Manifest {
 				Surface::MessageEvent => Some(Capability::MessageEvents),
 				Surface::AppEvent => Some(Capability::AppEvents),
 				Surface::Tick => Some(Capability::Appearance),
+				Surface::BeforeSend => Some(Capability::Composer),
 			};
 			if required.is_some_and(|c| !capabilities.contains(&c)) {
 				return Err(Error::Capability);
@@ -1038,7 +1041,9 @@ impl Invocation {
 			}
 		}
 		if self.selected_message.is_some() && action.surface != Surface::Message
-			|| self.composer.is_some() && action.surface != Surface::Composer
+			|| self.composer.is_some()
+				&& !matches!(action.surface, Surface::Composer | Surface::BeforeSend)
+			|| self.composer.is_none() && action.surface == Surface::BeforeSend
 			|| self.tick_ms.is_some() && action.surface != Surface::Tick
 			|| self.tick_ms.is_none() && action.surface == Surface::Tick
 		{
@@ -1083,6 +1088,17 @@ impl Output {
 				|| self.replacement.is_some()
 				|| !self.panel.is_empty()
 				|| self.storage.is_some()
+				|| !self.effects.is_empty())
+		{
+			return Err(Error::Capability);
+		}
+		if surface == Surface::BeforeSend
+			&& (self.rich_presence.is_some()
+				|| self.image_sharing
+				|| self.preserve_deleted_messages
+				|| self.appearance.is_some()
+				|| self.api_proxy.is_some()
+				|| !self.panel.is_empty()
 				|| !self.effects.is_empty())
 		{
 			return Err(Error::Capability);

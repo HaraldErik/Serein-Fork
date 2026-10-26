@@ -1,0 +1,16 @@
+{
+  "api_version": 1,
+  "id": "text-replace",
+  "name": "Text Replace",
+  "version": "1.0.0",
+  "author": "Serein contributors",
+  "license": "MIT OR Apache-2.0",
+  "source": "https://github.com/HaraldErik/Serein-Fork/tree/main/examples/extensions/text-replace",
+  "kind": "plugin",
+  "capabilities": ["composer", "storage"],
+  "actions": [
+    {"id": "settings", "label": "Edit replacement rules", "surface": "panel"},
+    {"id": "save", "label": "Save rules", "surface": "panel"},
+    {"id": "send", "label": "Replace words before sending", "surface": "before_send"}
+  ]
+}

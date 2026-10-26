@@ -159,6 +159,7 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `app_event` | Connection, navigation, voice, settings… change | `storage` |
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
+| `before_send` | Preview: you press **Send** with text in the draft | `replacement` text that is sent instead |
 
 Event surfaces cannot show panels or propose actions; they stay passive.
 
@@ -212,6 +213,37 @@ Manifest: `"capabilities": ["message_events", "decorations"]` and an action with
 Current gaps: decorations show only in the normal (non-compact) message layout; they only appear for
 messages seen after the plugin is enabled; there are no user or server decorations yet.
 
+## Send hooks: rewrite the draft when you press Send (preview)
+
+An action with `"surface": "before_send"` (requires the `composer` capability) receives the draft in
+`composer` every time you press **Send**. Return `replacement` to change what is sent, or nothing to
+send the draft unchanged. Pressing Send is the confirmation, so no Apply click is needed.
+
+```rust
+use serein_extension_sdk::{Invocation, Output};
+
+fn handle(input: Invocation) -> Output {
+    let Some(draft) = input.composer else { return Output::default() };
+    let fixed = draft.replace(" teh ", " the ");
+    Output { replacement: (fixed != draft).then_some(fixed), ..Default::default() }
+}
+serein_extension_sdk::export!(handle);
+```
+
+How the host runs them:
+
+- All enabled `before_send` actions run one after another, in ascending plugin-ID order. Each one
+  sees the previous plugin's text.
+- The message is sent once every plugin has finished. If any plugin fails, is disabled, takes longer
+  than 15 seconds, or you edit the draft or switch conversation meanwhile, nothing is sent and your
+  draft is kept.
+- A `before_send` result may only contain `replacement` and `storage`; panels, effects and other
+  outputs are rejected.
+- Hooks run for typed drafts (with or without attachments). Message edits, stickers, GIFs and slash
+  commands do not run them.
+
+Complete tested example with a settings panel: [`examples/extensions/text-replace`](../examples/extensions/text-replace/src/lib.rs).
+
 ## Publishing and sharing
 
 - Keep source and license public. Share the `.serein-extension` file, or add it to the catalog under
@@ -221,7 +253,7 @@ messages seen after the plugin is enabled; there are no user or server decoratio
 
 ## What is planned
 
-Decorations are the first piece of the [Plugin API v2](plugin-api-v2.md): UI entries (buttons, menu
+Decorations and send hooks are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
 items, settings pages), send hooks and commands, timers, storage with more keys, pull-only network
 access to hosts you approve, and limited auto-apply for low-risk actions. Plugins that depend on
 patching Discord's web client have no equivalent in a native client.

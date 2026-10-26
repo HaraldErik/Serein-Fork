@@ -317,6 +317,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "text-replace"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serein-extension-sdk",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
