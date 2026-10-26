@@ -116,6 +116,34 @@ fn check_link_badges(name: &str, package: &Package) {
 		plain.decoration.is_none(),
 		"{name}: plain text must stay undecorated"
 	);
+	let loaded = |id: &str, content: &str| MessageEvent {
+		kind: MessageEventKind::Create,
+		channel_id: "100".into(),
+		message_id: id.into(),
+		author_id: Some("300".into()),
+		content: Some(content.into()),
+	};
+	let batch = Invocation {
+		action: "decorate".into(),
+		messages: Some(Box::new(vec![
+			loaded("201", "plain"),
+			loaded("202", "https://example.com"),
+		])),
+		..Default::default()
+	};
+	batch
+		.validate(&package.manifest)
+		.expect("decorate input is valid");
+	let output = invoke(package, &batch).expect("decorate batch succeeds");
+	output
+		.validate(&package.manifest, &batch)
+		.expect("decorate output is accepted");
+	let ids: Vec<_> = output
+		.decorations
+		.iter()
+		.map(|item| item.message_id.as_str())
+		.collect();
+	assert_eq!(ids, ["202"], "{name}: only the link is decorated");
 	println!("{name}: decorations validated in the host sandbox");
 }
 

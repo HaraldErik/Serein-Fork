@@ -164,7 +164,12 @@ pub enum Surface {
 	BeforeSend,
 	/// Runs for `/<action id> arguments` typed in the composer; arguments arrive in `composer`.
 	Command,
+	/// Receives a batch of already-loaded messages in `messages` and returns `decorations`.
+	Decorate,
 }
+
+/// Most loaded messages one `decorate` call receives (and decorations it may return).
+pub const MAX_DECORATE_BATCH: usize = 32;
 
 /// Longest `/name` a plugin command may use.
 pub const MAX_COMMAND_NAME_BYTES: usize = 32;
@@ -403,6 +408,10 @@ pub struct Invocation {
 	/// Milliseconds elapsed since this plugin was enabled for the current session.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tick_ms: Option<u64>,
+	/// Already-loaded messages for a `decorate` action, newest first. Boxed like the other
+	/// optional groups so request queues stay small; the wire form is a plain array.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub messages: Option<Box<Vec<MessageEvent>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -542,6 +551,9 @@ pub struct Output {
 	/// Badges/text for the message that triggered a message-event handler.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub decoration: Option<Decoration>,
+	/// Per-message decorations from a `decorate` handler; each ID must be in its input batch.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub decorations: Vec<MessageDecoration>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -717,7 +729,14 @@ impl Manifest {
 				Surface::AppEvent => Some(Capability::AppEvents),
 				Surface::Tick => Some(Capability::Appearance),
 				Surface::BeforeSend | Surface::Command => Some(Capability::Composer),
+				Surface::Decorate => Some(Capability::Decorations),
 			};
+			// Batches carry message text, like live message events.
+			if action.surface == Surface::Decorate
+				&& !capabilities.contains(&Capability::MessageEvents)
+			{
+				return Err(Error::Capability);
+			}
 			if action.surface == Surface::Command && action.id.len() > MAX_COMMAND_NAME_BYTES {
 				return Err(Error::Invalid);
 			}
@@ -968,12 +987,24 @@ pub fn parse_catalog(bytes: &[u8]) -> Result<Catalog, Error> {
 }
 
 impl Invocation {
+	/// The `decorate` batch; empty for every other action.
+	pub fn messages(&self) -> &[MessageEvent] {
+		self.messages.as_deref().map_or(&[], Vec::as_slice)
+	}
 	pub fn validate(&self, manifest: &Manifest) -> Result<(), Error> {
 		let action = manifest
 			.actions
 			.iter()
 			.find(|a| a.id == self.action)
 			.ok_or(Error::Invalid)?;
+		if (action.surface == Surface::Decorate) == self.messages().is_empty()
+			|| self.messages().len() > MAX_DECORATE_BATCH
+		{
+			return Err(Error::Capability);
+		}
+		for message in self.messages() {
+			message.validate()?;
+		}
 		if let Some(snapshot) = &self.app {
 			snapshot.validate(manifest)?;
 		}
@@ -1103,7 +1134,25 @@ impl Output {
 		{
 			return Err(Error::Capability);
 		}
-		if surface == Surface::BeforeSend
+		if surface == Surface::Decorate && (self.replacement.is_some() || self.decoration.is_some())
+			|| surface != Surface::Decorate && !self.decorations.is_empty()
+		{
+			return Err(Error::Capability);
+		}
+		if self.decorations.len() > MAX_DECORATE_BATCH {
+			return Err(Error::Limit);
+		}
+		for item in &self.decorations {
+			if !input
+				.messages()
+				.iter()
+				.any(|message| message.message_id == item.message_id)
+			{
+				return Err(Error::Invalid);
+			}
+			item.decoration.validate()?;
+		}
+		if matches!(surface, Surface::BeforeSend | Surface::Decorate)
 			&& (self.rich_presence.is_some()
 				|| self.image_sharing
 				|| self.preserve_deleted_messages

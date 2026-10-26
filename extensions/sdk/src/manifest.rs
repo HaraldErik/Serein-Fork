@@ -99,6 +99,7 @@ pub enum Surface {
 	Tick,
 	BeforeSend,
 	Command,
+	Decorate,
 }
 
 /// Declared entry point; its ID arrives in `Invocation::action`.
