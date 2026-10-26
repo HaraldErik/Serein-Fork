@@ -21,6 +21,8 @@ mod member_details;
 pub use member_details::*;
 mod app;
 pub use app::*;
+mod decorations;
+pub use decorations::*;
 mod extended;
 pub use extended::*;
 
