@@ -5,7 +5,7 @@ use cpal::{SampleFormat, SupportedStreamConfig, SupportedStreamConfigRange};
 const UNSUPPORTED: &str = "Audio device format is unsupported; choose another device";
 
 /// Selection policy for the caller's existing playback and channel conversion.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputConfigPreference {
 	/// Prefer 48 kHz and the fewest channels, as voice playback historically did.
 	Voice,
@@ -63,12 +63,26 @@ fn select_output_config<I: Iterator<Item = SupportedStreamConfigRange>>(
 	}
 }
 
+/// PulseAudio/PipeWire advertise every sample format at 1..=32 channels (about 155 ranges, with
+/// float last), so a small cap would never reach F32. Still bounded against hostile drivers.
+const MAX_ADVERTISED: usize = 512;
+
+/// Among otherwise equal candidates prefer float, then wider integers.
+fn format_rank(format: SampleFormat) -> u8 {
+	match format {
+		SampleFormat::F32 => 0,
+		SampleFormat::I32 => 1,
+		SampleFormat::I16 => 2,
+		_ => 3,
+	}
+}
+
 fn advertised(
 	supported: impl Iterator<Item = SupportedStreamConfigRange>,
 	preference: OutputConfigPreference,
 ) -> Option<SupportedStreamConfig> {
 	supported
-		.take(64)
+		.take(MAX_ADVERTISED)
 		.filter(|config| {
 			(1..=8).contains(&config.channels()) && supported_format(config.sample_format())
 		})
@@ -87,11 +101,14 @@ fn advertised(
 			config.try_with_sample_rate(rate)
 		})
 		.min_by_key(|config| match preference {
-			OutputConfigPreference::Voice => (0, config.channels(), 0),
+			OutputConfigPreference::Voice => {
+				(0, config.channels(), 0, format_rank(config.sample_format()))
+			}
 			OutputConfigPreference::Notification => (
 				u16::from(config.channels() == 1),
 				config.channels().abs_diff(2),
 				config.sample_rate().abs_diff(48_000),
+				format_rank(config.sample_format()),
 			),
 		})
 }
@@ -172,6 +189,33 @@ mod tests {
 	}
 
 	#[test]
+	fn pulseaudio_24_bit_default_reaches_float_listed_after_every_integer_format() {
+		// Real layout from PipeWire's PulseAudio server for a USB headset (s24le, 96 kHz):
+		// each format at 1..=31 channels, F32 last, entries 125+.
+		let ranges: Vec<_> = [
+			SampleFormat::U8,
+			SampleFormat::I16,
+			SampleFormat::I24,
+			SampleFormat::I32,
+			SampleFormat::F32,
+		]
+		.into_iter()
+		.flat_map(|format| (1..=31).map(move |channels| range(channels, 1, 768_000, format)))
+		.collect();
+		let default = default_config(2, 96_000, SampleFormat::I24);
+		for preference in [Notification, Voice] {
+			let selected = select(preference, default, ranges.clone()).unwrap();
+			assert_eq!(
+				selected.sample_format(),
+				SampleFormat::F32,
+				"{preference:?}"
+			);
+		}
+		let notification = select(Notification, default, ranges).unwrap();
+		assert_eq!(notification.channels(), 2);
+	}
+
+	#[test]
 	fn notification_keeps_default_channels_and_can_fall_back_to_surround_or_mono() {
 		let selected = select_output_config(
 			Notification,
@@ -233,7 +277,7 @@ mod tests {
 	#[test]
 	fn selection_bounds_ranges_channels_and_rates_and_preserves_voice_fallback() {
 		let invalid = default_config(2, 48_000, SampleFormat::I24);
-		let mut ranges = vec![range(2, 48_000, 48_000, SampleFormat::I24); 64];
+		let mut ranges = vec![range(2, 48_000, 48_000, SampleFormat::I24); MAX_ADVERTISED];
 		ranges.push(range(2, 48_000, 48_000, SampleFormat::F32));
 		assert!(select(Notification, invalid, ranges).is_err());
 		let ranges = vec![

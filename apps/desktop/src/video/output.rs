@@ -114,9 +114,12 @@ pub fn open(rate: u32, controls: Controls) -> Result<Output, &'static str> {
 	let device = host
 		.default_output_device()
 		.ok_or("No audio output device")?;
-	let supported = device
-		.default_output_config()
-		.map_err(|_| "Audio output unavailable")?;
+	// Same selection as notification sounds: keep a usable default, otherwise pick a writable
+	// format (USB headsets often default to 24-bit, which these players cannot write).
+	let supported = platform::audio::output_config(
+		&device,
+		platform::audio::OutputConfigPreference::Notification,
+	)?;
 	let config = crate::audio::playback_config(host.id(), supported.config());
 	if !(1..=8).contains(&config.channels) || !(8000..=192000).contains(&config.sample_rate) {
 		return Err("Unsupported audio output format");
