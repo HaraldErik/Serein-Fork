@@ -491,7 +491,11 @@ impl MessagingUi {
 									Page::Extensions | Page::Themes => {
 										self.extensions
 											.select_themes(self.settings.page == Page::Themes);
-										self.extensions.settings(ui, state);
+										let (builtin, open) =
+											(&mut self.builtin, &mut self.builtin_config_open);
+										self.extensions.settings(ui, state, |ui| {
+											crate::builtin_extensions::section(ui, builtin, open);
+										});
 									}
 								}
 								if state.demo {
@@ -1138,26 +1142,6 @@ impl MessagingUi {
 				Some("settings-convert-emoticons-description"),
 				&mut self.convert_emoticons,
 			);
-			for (label, detail, value) in [
-				(
-					"settings-clear-urls",
-					"settings-clear-urls-description",
-					&mut self.clear_urls,
-				),
-				(
-					"settings-send-timestamps",
-					"settings-send-timestamps-description",
-					&mut self.send_timestamps,
-				),
-				(
-					"settings-silent-message-toggle",
-					"settings-silent-message-toggle-description",
-					&mut self.silent_message_toggle,
-				),
-			] {
-				design::card_divider(ui);
-				design::switch(ui, label, Some(detail), value);
-			}
 		});
 		design::group(
 			ui,

@@ -48,6 +48,7 @@ mod rich_presence;
 mod theme_editor;
 mod thread_create;
 pub use extensions_ui::{ExtensionContext, ExtensionEntry, ExtensionRequest, ExtensionUi};
+mod builtin_extensions;
 pub mod emoji;
 mod emoji_details;
 mod emoji_picker;
@@ -255,14 +256,12 @@ pub struct MessagingUi {
 	pub language: i18n::Language,
 	forwarding: forwarding::ForwardDialog,
 	pub convert_emoticons: bool,
-	/// Device preference (ClearURLs): strip tracking parameters from links when sending.
-	pub clear_urls: bool,
-	/// Device preference (SendTimestamps): `` `18:30` `` becomes a local-time timestamp.
-	pub send_timestamps: bool,
-	/// Composer bell toggle: send the next message silently, then switch back off.
+	/// Built-in extensions' on/off and Config (Settings → Extensions → Built-in).
+	pub builtin: model::BuiltinExtensions,
+	/// Which built-in extension's Config is expanded on the Extensions page.
+	builtin_config_open: Option<&'static str>,
+	/// Composer bell (Silent Message Toggle): send the next message silently.
 	silent_next: bool,
-	/// Device preference: show the composer's silent-message toggle.
-	pub silent_message_toggle: bool,
 	/// Device preference: request a conversation's page while the pointer rests on it.
 	pub preload_on_hover: bool,
 	preload: preload::Preload,
@@ -2803,19 +2802,25 @@ impl MessagingUi {
 				Some((state.generation, channel, assets, draft.to_owned()));
 			return;
 		}
-		let silent = std::mem::take(&mut self.silent_next);
-		let original_draft =
-			if self.convert_emoticons || self.clear_urls || self.send_timestamps || silent {
-				state.drafts.get_mut(&channel).map(|draft| {
-					let mut converted = self.rewrite_for_send(draft);
-					if silent {
-						converted = send_tools::make_silent(&converted);
-					}
-					std::mem::replace(draft, converted)
-				})
-			} else {
-				None
-			};
+		let silent = self.silent_next && self.builtin.silent_toggle.enabled;
+		if self.builtin.silent_toggle.auto_disable {
+			self.silent_next = false;
+		}
+		let original_draft = if self.convert_emoticons
+			|| self.builtin.clear_urls.enabled
+			|| self.builtin.send_timestamps.enabled
+			|| silent
+		{
+			state.drafts.get_mut(&channel).map(|draft| {
+				let mut converted = self.rewrite_for_send(draft, false);
+				if silent {
+					converted = send_tools::make_silent(&converted);
+				}
+				std::mem::replace(draft, converted)
+			})
+		} else {
+			None
+		};
 		if let Some(command) = state.prepare_send_with_attachments(
 			&self
 				.selected_files()
@@ -2829,24 +2834,27 @@ impl MessagingUi {
 			commands.push(command);
 		} else {
 			// Nothing was sent: keep the typed draft and the bell state for the retry.
-			self.silent_next = silent;
+			self.silent_next |= silent;
 			if let Some(original) = original_draft {
 				state.drafts.insert(channel, original);
 			}
 		}
 	}
-	/// Applies the enabled device-local rewrites (emoticons, ClearURLs, SendTimestamps).
-	fn rewrite_for_send(&self, text: &str) -> String {
+	/// Applies emoticon conversion and the enabled built-in send extensions
+	/// (ClearURLs, SendTimestamps); `edit` honours each extension's "also on edits" option.
+	fn rewrite_for_send(&self, text: &str, edit: bool) -> String {
 		let mut text = if self.convert_emoticons {
 			emoticons::convert(text)
 		} else {
 			text.to_owned()
 		};
-		if self.clear_urls {
-			text = send_tools::clear_urls(&text);
+		let urls = self.builtin.clear_urls;
+		if urls.enabled && (!edit || urls.on_edit) {
+			text = send_tools::clear_urls(&text, urls.site_rules);
 		}
-		if self.send_timestamps {
-			text = send_tools::send_timestamps(&text, local_time::now());
+		let times = self.builtin.send_timestamps;
+		if times.enabled && (!edit || times.on_edit) {
+			text = send_tools::send_timestamps(&text, local_time::now(), times.style);
 		}
 		text
 	}
@@ -3556,7 +3564,7 @@ impl MessagingUi {
                             })
                             .inner;
                         let send = enter || send_button.clicked();
-                        if self.silent_message_toggle && !editing_here && !application_command {
+                        if self.builtin.silent_toggle.enabled && !editing_here && !application_command {
                             let label = if self.silent_next {
                                 "lib-silent-toggle-on"
                             } else {
@@ -3919,7 +3927,7 @@ impl MessagingUi {
                             if let Some((edit_channel, message, content)) = &editing {
                                 if state.freshness == Freshness::Fresh
                                     && let Some(command) = state.prepare_edit(*edit_channel, *message,
-                                        self.rewrite_for_send(content))
+                                        self.rewrite_for_send(content, true))
                                 {
                                     if let Command::Edit { content: submitted, .. } = &command {
                                         self.edit_sent = Some(SubmittedEdit {

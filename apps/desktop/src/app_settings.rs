@@ -54,9 +54,7 @@ impl Settings {
 			show_hidden_channels: ui.show_hidden_channels,
 			hide_nitro_emojis: ui.hide_nitro_emojis,
 			convert_emoticons: ui.convert_emoticons,
-			clear_urls: ui.clear_urls,
-			send_timestamps: ui.send_timestamps,
-			silent_message_toggle: ui.silent_message_toggle,
+			builtin_extensions: ui.builtin,
 			preload_on_hover: ui.preload_on_hover,
 			hide_title_bar: ui.hide_title_bar,
 			message_requests_collapsed: ui.message_requests_collapsed,
@@ -106,9 +104,7 @@ impl Settings {
 		ui.show_hidden_channels = value.show_hidden_channels;
 		ui.hide_nitro_emojis = value.hide_nitro_emojis;
 		ui.convert_emoticons = value.convert_emoticons;
-		ui.clear_urls = value.clear_urls;
-		ui.send_timestamps = value.send_timestamps;
-		ui.silent_message_toggle = value.silent_message_toggle;
+		ui.builtin = value.builtin_extensions;
 		ui.preload_on_hover = value.preload_on_hover;
 		ui.hide_title_bar = value.hide_title_bar;
 		ui.message_requests_collapsed = value.message_requests_collapsed;
@@ -408,9 +404,7 @@ mod tests {
 		ui.transparency = defaults.transparency;
 		ui.blur = defaults.blur;
 		ui.preload_on_hover = defaults.preload_on_hover;
-		ui.clear_urls = defaults.clear_urls;
-		ui.send_timestamps = defaults.send_timestamps;
-		ui.silent_message_toggle = defaults.silent_message_toggle;
+		ui.builtin = defaults.builtin_extensions;
 		settings.observe(&ui);
 		assert!(
 			!settings.state.touched,

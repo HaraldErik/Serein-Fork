@@ -30,6 +30,33 @@
 > [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md)
 > before use.
 
+## How features are added: everything is an extension
+
+**This is the fork's main development rule.** Every new feature, including every port of an
+Equicord/Vencord plugin and every quality-of-life addition, is an **extension** that you find
+under **Settings → Extensions**, can turn **on and off**, and configure in **its own Config**
+there. Feature switches and options are **never** added to ordinary settings pages (Chat, Voice,
+Appearance…).
+
+There are two kinds, both listed on the Extensions page:
+
+| Kind | What it is | When to use it |
+| --- | --- | --- |
+| **Plugin** | A separate sandboxed Wasm file (`.serein-extension`) from the catalog or *Import package*. Enabling installs it, disabling removes it. | **Preferred.** Whenever the [plugin API](docs/plugin-guide.md) can do the job. |
+| **Built-in extension** | Native code shipped inside Serein-Fork, shown in the **Built-in** section with a switch and a **Config** panel. | Only when the sandbox cannot do it: audio and voice, composer buttons, anything on the UI's hot path. |
+
+Built-in extensions today:
+
+| Extension | Equicord original | Config |
+| --- | --- | --- |
+| Volume Booster | VolumeBooster | Maximum user/stream volume: 200, 300 or 400% |
+| ClearURLs | ClearURLs | Site-specific rules; also apply to edits |
+| Send Timestamps | SendTimestamps | Timestamp style; also apply to edits |
+| Silent Message Toggle | SilentMessageToggle | Turn off after sending |
+
+When a built-in extension's job becomes possible through the plugin API, move it to a plugin.
+Developer details are in [AGENTS.md](AGENTS.md#extensions-first-rule-fork).
+
 ## About this fork
 
 Serein-Fork is a fork of [ViceVerse-cz/Serein](https://github.com/ViceVerse-cz/Serein) that adds:
