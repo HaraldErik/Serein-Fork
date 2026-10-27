@@ -45,16 +45,18 @@ There are two kinds, both listed on the Extensions page:
 | **Plugin** | A separate sandboxed Wasm file (`.serein-extension`) from the catalog or *Import package*. Enabling installs it, disabling removes it. | **Preferred.** Whenever the [plugin API](docs/plugin-guide.md) can do the job. |
 | **Built-in extension** | Native code shipped inside Serein-Fork, shown in the **Built-in** section with a switch and a **Config** panel. | Only when the sandbox cannot do it: audio and voice, composer buttons, anything on the UI's hot path. |
 
-Built-in extensions today:
+Built-in extensions are **off by default**; turn on the ones you want. Built-in extensions today:
 
 | Extension | Equicord original | Config |
 | --- | --- | --- |
 | Volume Booster | VolumeBooster | Maximum user/stream volume: 200, 300 or 400% |
 | ClearURLs | ClearURLs | Site-specific rules; also apply to edits |
 | Send Timestamps | SendTimestamps | Timestamp style; also apply to edits |
-| Silent Message Toggle | SilentMessageToggle | Turn off after sending |
+| Silent Message Toggle | SilentMessageToggle | Turn off after sending. Red bell beside Send while on; silent messages show a bell-with-z by their time |
 
 When a built-in extension's job becomes possible through the plugin API, move it to a plugin.
+All work on plugins and built-in extensions happens on the single long-lived **`plugins`** branch
+(one PR from `plugins` into `main`), not one branch per plugin.
 Developer details are in [AGENTS.md](AGENTS.md#extensions-first-rule-fork).
 
 ## About this fork

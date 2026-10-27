@@ -2129,7 +2129,10 @@ mod tests {
 		assert!(!builtin.volume_booster.enabled);
 		assert_eq!(builtin.volume_booster.max_percent, 400);
 		assert_eq!(builtin.volume_booster.ceiling(), 200);
-		assert!(builtin.clear_urls.enabled && partial.is_valid());
+		// Built-in extensions are opt-in: anything not saved stays off.
+		assert!(
+			!builtin.clear_urls.enabled && !builtin.silent_toggle.enabled && partial.is_valid()
+		);
 		let mut invalid = AppPreferences::default();
 		invalid.builtin_extensions.volume_booster.max_percent = 401;
 		assert!(!invalid.is_valid());
