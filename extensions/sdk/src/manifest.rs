@@ -105,6 +105,7 @@ pub enum Surface {
 	Command,
 	Decorate,
 	FetchResult,
+	Schedule,
 }
 
 /// Declared entry point; its ID arrives in `Invocation::action`.

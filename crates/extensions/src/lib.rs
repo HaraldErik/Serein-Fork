@@ -172,6 +172,8 @@ pub enum Surface {
 	Decorate,
 	/// Receives the outcome of this plugin's `fetch` request in `fetch_result`.
 	FetchResult,
+	/// Runs about once a minute while the plugin is enabled; `tick_ms` is the time since enabling.
+	Schedule,
 }
 
 /// Most loaded messages one `decorate` call receives (and decorations it may return).
@@ -756,6 +758,7 @@ impl Manifest {
 				Surface::BeforeSend | Surface::Command => Some(Capability::Composer),
 				Surface::Decorate => Some(Capability::Decorations),
 				Surface::FetchResult => Some(Capability::Network),
+				Surface::Schedule => None,
 			};
 			// Batches carry message text, like live message events.
 			if action.surface == Surface::Decorate
@@ -1118,8 +1121,7 @@ impl Invocation {
 					Surface::Composer | Surface::BeforeSend | Surface::Command
 				) || self.composer.is_none()
 			&& matches!(action.surface, Surface::BeforeSend | Surface::Command)
-			|| self.tick_ms.is_some() && action.surface != Surface::Tick
-			|| self.tick_ms.is_none() && action.surface == Surface::Tick
+			|| self.tick_ms.is_some() != matches!(action.surface, Surface::Tick | Surface::Schedule)
 		{
 			return Err(Error::Capability);
 		}
@@ -1173,6 +1175,19 @@ impl Output {
 				return Err(Error::Capability);
 			}
 			fetch.validate(manifest)?;
+		}
+		if surface == Surface::Schedule
+			&& (self.replacement.is_some()
+				|| self.decoration.is_some()
+				|| !self.decorations.is_empty()
+				|| !self.panel.is_empty()
+				|| !self.effects.is_empty()
+				|| self.rich_presence.is_some()
+				|| self.api_proxy.is_some()
+				|| self.preserve_deleted_messages
+				|| self.image_sharing)
+		{
+			return Err(Error::Capability);
 		}
 		if surface == Surface::FetchResult
 			&& (self.replacement.is_some()

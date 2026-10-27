@@ -69,6 +69,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::Command,
 		Surface::Decorate,
 		Surface::FetchResult,
+		Surface::Schedule,
 	]
 	.into_iter()
 	.enumerate()
@@ -600,6 +601,45 @@ fn before_send_needs_the_draft_and_may_only_rewrite_it() {
 	}
 	manifest.capabilities.retain(|c| *c != Capability::Composer);
 	assert!(matches!(manifest.validate(), Err(Error::Capability)));
+}
+
+#[test]
+fn scheduled_runs_carry_elapsed_time_and_stay_passive() {
+	let mut manifest = test_manifest(vec![Capability::Storage, Capability::Appearance]);
+	manifest.actions[0].surface = Surface::Schedule;
+	manifest.validate().unwrap();
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(
+		input.validate(&manifest).is_err(),
+		"elapsed time is required"
+	);
+	input.tick_ms = Some(60_000);
+	input.validate(&manifest).unwrap();
+	Output {
+		storage: Some("1".into()),
+		appearance: Some(Theme::default()),
+		..Default::default()
+	}
+	.validate(&manifest, &input)
+	.unwrap();
+	for loud in [
+		Output {
+			panel: vec![Element::Separator],
+			..Default::default()
+		},
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		},
+	] {
+		assert!(loud.validate(&manifest, &input).is_err());
+	}
+	// Elapsed time never reaches other foreground actions.
+	manifest.actions[0].surface = Surface::Panel;
+	assert!(input.validate(&manifest).is_err());
 }
 
 #[test]

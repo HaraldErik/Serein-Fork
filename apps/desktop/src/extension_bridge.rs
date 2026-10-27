@@ -28,7 +28,10 @@ struct Pending {
 impl Pending {
 	fn reactive(&self) -> bool {
 		self.invocation.as_ref().is_some_and(|(_, input, _)| {
-			input.message_event.is_some() || input.app_event.is_some() || input.messages.is_some()
+			input.message_event.is_some()
+				|| input.app_event.is_some()
+				|| input.messages.is_some()
+				|| input.tick_ms.is_some()
 		})
 	}
 }
@@ -114,6 +117,7 @@ const MESSAGE_EVENT_INTERVAL: Duration = Duration::from_millis(100);
 const FETCH_WINDOW: Duration = Duration::from_secs(60);
 const MAX_FETCHES_PER_WINDOW: usize = 10;
 const FETCH_STALE: Duration = Duration::from_secs(30);
+const SCHEDULE_INTERVAL: Duration = Duration::from_secs(60);
 
 fn attach_app_data(
 	invocation: &mut Invocation,
@@ -133,6 +137,8 @@ enum ReactiveEvent {
 	Message(MessageEvent),
 	/// A completed `fetch`, for the plugin's `fetch_result` action.
 	Fetched(extensions::FetchResult),
+	/// A `schedule` run, with milliseconds since the plugin was enabled.
+	Scheduled(u64),
 	/// Already-loaded messages for a `decorate` action, newest first.
 	Decorate(Vec<MessageEvent>),
 	App(AppEventKind),
@@ -150,7 +156,7 @@ impl ReactiveEvent {
 	fn available(&self, state: &State) -> bool {
 		match self {
 			Self::Message(_) | Self::Decorate(_) => crate::extension_events::available(state),
-			Self::Fetched(_) => state.user.is_some(),
+			Self::Fetched(_) | Self::Scheduled(_) => state.user.is_some(),
 			Self::App(_) | Self::ActionResult(_) => crate::extension_app::available(state),
 		}
 	}
@@ -174,6 +180,7 @@ impl QueuedEvent {
 				ReactiveEvent::Fetched(result) => {
 					result.url.len() + result.body.as_ref().map_or(0, String::len)
 				}
+				ReactiveEvent::Scheduled(_) => 0,
 			}
 	}
 }
@@ -213,6 +220,8 @@ pub struct Bridge {
 	fetch_log: BTreeMap<String, VecDeque<Instant>>,
 	/// Plugins whose in-flight `fetch` came from a foreground action, so its result may show a panel.
 	foreground_fetch: BTreeSet<String>,
+	/// `schedule` plugins: when each was enabled and when it runs next.
+	schedules: BTreeMap<String, (Instant, Instant)>,
 	extended_key: Option<u64>,
 	app_context_changed: bool,
 	data_changes: crate::extension_data_events::Changes,
@@ -484,6 +493,48 @@ impl Bridge {
 			self.message_events.push_back(queued);
 		}
 	}
+	/// Queues each enabled `schedule` action about once a minute, first right after enabling.
+	fn queue_schedules(&mut self, state: &State, now: Instant) {
+		let active: Vec<(String, String)> = self
+			.installed
+			.iter()
+			.filter(|entry| {
+				entry.error.is_none()
+					&& !self.disabled.contains(&entry.manifest.id)
+					&& self.scope_current(state)
+			})
+			.filter_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.find(|action| action.surface == Surface::Schedule)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		self.schedules
+			.retain(|id, _| active.iter().any(|(active, _)| active == id));
+		for (id, action) in active {
+			let (enabled, next) = *self.schedules.entry(id.clone()).or_insert((now, now));
+			let queued = self
+				.message_events
+				.iter()
+				.any(|event| event.id == id && matches!(event.event, ReactiveEvent::Scheduled(_)));
+			if now < next || queued || self.message_events.len() >= MAX_MESSAGE_EVENTS {
+				continue;
+			}
+			self.message_events.push_back(QueuedEvent {
+				id: id.clone(),
+				action,
+				context: ExtensionContext::capture(state, false),
+				event: ReactiveEvent::Scheduled(
+					u64::try_from(now.duration_since(enabled).as_millis()).unwrap_or(u64::MAX),
+				),
+			});
+			self.schedules
+				.insert(id, (enabled, now + SCHEDULE_INTERVAL));
+		}
+	}
 	/// Reserves a `fetch` slot: one in flight and ten per minute for each plugin.
 	fn admit_fetch(&mut self, id: &str, now: Instant) -> bool {
 		let log = self.fetch_log.entry(id.to_owned()).or_default();
@@ -750,6 +801,7 @@ impl Bridge {
 			self.fetching.clear();
 			self.fetch_log.clear();
 			self.foreground_fetch.clear();
+			self.schedules.clear();
 			self.app_key = None;
 			self.app_context_changed = false;
 			self.data_changes = Default::default();
@@ -1148,7 +1200,9 @@ impl Bridge {
 								&id, request, foreground, &account, state, ctx, messaging,
 							);
 						}
-						if surface == Some(Surface::FetchResult) {
+						if surface == Some(Surface::Schedule) {
+							// Passive: storage, appearance and fetch were handled above or by the worker.
+						} else if surface == Some(Surface::FetchResult) {
 							if was_foreground && !output.panel.is_empty() {
 								messaging
 									.extensions
@@ -1628,6 +1682,7 @@ impl Bridge {
 		}
 		self.app_events(state, messaging);
 		self.queue_decorate_batches(state);
+		self.queue_schedules(state, Instant::now());
 		let available = self.scope_current(state);
 		let installed = &self.installed;
 		let disabled = &self.disabled;
@@ -1666,6 +1721,7 @@ impl Bridge {
 						ReactiveEvent::Fetched(result) => {
 							invocation.fetch_result = Some(Box::new(result))
 						}
+						ReactiveEvent::Scheduled(elapsed) => invocation.tick_ms = Some(elapsed),
 						ReactiveEvent::App(kind) => {
 							invocation.app_event = Some(kind);
 							let manifest = &self
@@ -2231,6 +2287,44 @@ mod tests {
 			.unwrap();
 		bridge.queue_decorate_batches(&state);
 		assert!(batch(&bridge).is_empty());
+	}
+
+	#[test]
+	fn scheduled_plugins_run_once_a_minute_without_piling_up() {
+		let (mut bridge, state, _) = message_events_fixture();
+		bridge.installed[0].manifest.actions = vec![extensions::Action {
+			id: "every-minute".into(),
+			label: "Refresh".into(),
+			surface: Surface::Schedule,
+		}];
+		let runs = |bridge: &Bridge| -> Vec<u64> {
+			bridge
+				.message_events
+				.iter()
+				.filter_map(|event| match event.event {
+					ReactiveEvent::Scheduled(ms) => Some(ms),
+					_ => None,
+				})
+				.collect()
+		};
+		let start = Instant::now();
+		bridge.queue_schedules(&state, start);
+		assert_eq!(runs(&bridge), [0], "first run right after enabling");
+		bridge.queue_schedules(&state, start + Duration::from_secs(10));
+		assert_eq!(runs(&bridge), [0]);
+		// A run that has not been delivered yet is never duplicated.
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL);
+		assert_eq!(runs(&bridge), [0]);
+		bridge.message_events.clear();
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL);
+		assert_eq!(runs(&bridge), [SCHEDULE_INTERVAL.as_millis() as u64]);
+		// Disabling stops the schedule.
+		bridge.message_events.clear();
+		bridge
+			.disabled
+			.insert(bridge.installed[0].manifest.id.clone());
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL * 3);
+		assert!(runs(&bridge).is_empty() && bridge.schedules.is_empty());
 	}
 
 	#[test]

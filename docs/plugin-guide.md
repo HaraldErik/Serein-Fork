@@ -159,6 +159,7 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `message_event` | A message is created, edited or deleted | `storage`, or a **decoration** |
 | `decorate` | Preview: the conversation's loaded messages change | per-message **decorations** |
 | `fetch_result` | Preview: a download this plugin asked for finished | `storage`, or a panel if a button started it |
+| `schedule` | Preview: about once a minute while enabled, first right after enabling | `storage`, `appearance`, or a `fetch` |
 | `app_event` | Connection, navigation, voice, settings… change | `storage` |
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
@@ -322,6 +323,15 @@ Limits: up to 8 hosts per plugin, one download in flight and 10 per minute per p
 screen lists the hosts. Those sites see your IP address and the URLs you build, so never put private
 data in a URL. Example: [`examples/extensions/github-zen`](../examples/extensions/github-zen/src/lib.rs).
 
+## Timers (preview)
+
+An action with `"surface": "schedule"` needs no extra capability and runs about once a minute while
+the plugin is enabled and an account is signed in, the first time right after enabling. `tick_ms` holds
+the milliseconds since enabling; there is no wall clock, so use it to act less often, for example only
+when `tick_ms / 600_000` changed since the value you saved. A scheduled run may return `storage`,
+`appearance` or a `fetch` (with `network`), never a panel or proposal. Runs share the bounded plugin
+event queue and never pile up: a run that has not started yet is not queued twice.
+
 ## Publishing and sharing
 
 - Keep source and license public. Share the `.serein-extension` file, or add it to the catalog under
@@ -331,7 +341,7 @@ data in a URL. Example: [`examples/extensions/github-zen`](../examples/extension
 
 ## What is planned
 
-Decorations, send hooks, slash commands and pull-only downloads are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
+Decorations, send hooks, slash commands, pull-only downloads and timers are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
 items, settings pages), send hooks and commands, timers, storage with more keys, pull-only network
 access to hosts you approve, and limited auto-apply for low-risk actions. Plugins that depend on
 patching Discord's web client have no equivalent in a native client.
