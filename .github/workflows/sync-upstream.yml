@@ -38,6 +38,8 @@ jobs:
 
       - name: Merge upstream main into main, then main into plugins
         id: sync
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "serein-fork-sync[bot]"
@@ -74,7 +76,20 @@ jobs:
             echo "- Merged $behind upstream commit(s) into **main**." >> "$GITHUB_STEP_SUMMARY"
           else
             # Proves the token can still push, so a broken token is noticed before it matters.
-            git push --dry-run origin HEAD:main || fail "token check" "SYNC_TOKEN cannot push to this repository (Contents and Workflows need read/write)."
+            if ! git push --dry-run origin HEAD:main; then
+              # Ask GitHub which permission the token lacks (prints response headers, never the token).
+              probe=$(curl -s -o /dev/null -D - -X POST \
+                -H "Authorization: Bearer $SYNC_TOKEN" -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs" \
+                -d "{\"ref\":\"refs/heads/sync-token-probe\",\"sha\":\"$(git rev-parse HEAD)\"}" \
+                | grep -i -E '^HTTP/|x-accepted-github-permissions|github-authentication-token-expiration' || true)
+              echo "$probe"
+              case "$probe" in *" 201"*)
+                curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $SYNC_TOKEN" \
+                  "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/heads/sync-token-probe" ;;
+              esac
+              fail "token check" "SYNC_TOKEN cannot push to this repository. GitHub's answer:"$'\n```\n'"$probe"$'\n```'
+            fi
             echo "- **main** is already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
           fi
 
