@@ -4644,6 +4644,14 @@ member-in-voice = In voice
 settings-chat-box = Chat Box
 settings-convert-emoticons = Automatically convert emoticons in your messages to emoji
 settings-convert-emoticons-description = Convert standalone emoticons such as :) to 🙂 when sending or editing messages. Code and links stay unchanged.
+settings-clear-urls = Remove tracking from links
+settings-clear-urls-description = Strip tracking parameters such as utm_source, fbclid and YouTube or Spotify si= from links when sending. Code stays unchanged.
+settings-send-timestamps = Send times as timestamps
+settings-send-timestamps-description = Write a time in backticks, like `18:30` or `6:30 pm`, and it is sent as a timestamp that everyone sees in their own time zone.
+settings-silent-message-toggle = Silent message button
+settings-silent-message-toggle-description = Show a bell next to Send. While it is lit, your next message is sent without notifications.
+lib-silent-toggle-off = Send next message silently
+lib-silent-toggle-on = Next message is silent (click to cancel)
 settings-preload-on-hover = Preload on hover
 settings-preload-on-hover-description = Load a conversation, a profile or the GIF picker while the pointer rests on it, so it opens instantly. Uses the same requests as opening it, at most 12 per minute for each kind.
 

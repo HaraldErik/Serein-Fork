@@ -48,6 +48,12 @@ pub struct AppPreferences {
 	pub hide_nitro_emojis: bool,
 	/// Device-local opt-in; older saved preferences deserialize with conversion off.
 	pub convert_emoticons: bool,
+	/// Strip tracking parameters from links when sending (Equicord ClearURLs).
+	pub clear_urls: bool,
+	/// Turn `` `18:30` `` into a Discord timestamp when sending (Equicord SendTimestamps).
+	pub send_timestamps: bool,
+	/// Show the composer bell that sends the next message silently.
+	pub silent_message_toggle: bool,
 	/// Request a conversation's page while the pointer rests on it; older preferences enable it.
 	pub preload_on_hover: bool,
 	/// Hide the in-app title strip. macOS and Windows then show the system title bar.
@@ -102,6 +108,9 @@ impl Default for AppPreferences {
 			show_hidden_channels: false,
 			hide_nitro_emojis: false,
 			convert_emoticons: false,
+			clear_urls: true,
+			send_timestamps: true,
+			silent_message_toggle: true,
 			preload_on_hover: true,
 			hide_title_bar: false,
 			message_requests_collapsed: false,
