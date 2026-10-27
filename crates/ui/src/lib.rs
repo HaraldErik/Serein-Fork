@@ -3570,7 +3570,7 @@ impl MessagingUi {
                             } else {
                                 "lib-silent-toggle-off"
                             };
-                            if icons::toggle(ui, icons::Icon::Bell, 28.0, self.silent_next, label).clicked() {
+                            if icons::toggle_tinted(ui, icons::Icon::Bell, 28.0, self.silent_next, label, Some(colors.danger)).clicked() {
                                 self.silent_next = !self.silent_next;
                             }
                         }
@@ -4962,6 +4962,7 @@ impl MessagingUi {
 							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();
 						self.timeline.decorations = self.extensions.decorations();
+						self.timeline.silent_badges = self.builtin.silent_toggle.enabled;
 						self.timeline.quick_reactions =
 							Some(self.reaction_picker.quick_reactions());
 						let mut seen = std::collections::BTreeSet::new();

@@ -1,6 +1,6 @@
 //! On/off state and options of the fork's built-in extensions.
 //!
-//! Built-in extensions are native features that the Wasm sandbox cannot provide (audio, composer
+//! All of them are off until the user enables them. Built-in extensions are native features that the Wasm sandbox cannot provide (audio, composer
 //! buttons, send rewrites). They are listed under Settings → Extensions → Built-in with their own
 //! switch and Config, never on ordinary settings pages. Each one owns a field here.
 
@@ -50,7 +50,7 @@ impl VolumeBooster {
 impl Default for VolumeBooster {
 	fn default() -> Self {
 		Self {
-			enabled: true,
+			enabled: false,
 			max_percent: Self::MAX_CEILING,
 		}
 	}
@@ -70,7 +70,7 @@ pub struct ClearUrls {
 impl Default for ClearUrls {
 	fn default() -> Self {
 		Self {
-			enabled: true,
+			enabled: false,
 			site_rules: true,
 			on_edit: true,
 		}
@@ -95,14 +95,15 @@ impl SendTimestamps {
 impl Default for SendTimestamps {
 	fn default() -> Self {
 		Self {
-			enabled: true,
+			enabled: false,
 			style: 't',
 			on_edit: true,
 		}
 	}
 }
 
-/// Equicord SilentMessageToggle: a bell beside Send for `@silent` messages.
+/// Equicord SilentMessageToggle: a bell beside Send for `@silent` messages (red while armed),
+/// and a bell-with-z beside the time of every silent message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SilentToggle {
@@ -114,7 +115,7 @@ pub struct SilentToggle {
 impl Default for SilentToggle {
 	fn default() -> Self {
 		Self {
-			enabled: true,
+			enabled: false,
 			auto_disable: true,
 		}
 	}

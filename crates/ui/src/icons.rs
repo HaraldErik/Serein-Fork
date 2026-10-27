@@ -501,13 +501,27 @@ fn button_with_tooltip(
 
 /// Toggleable variant: `active` keeps the icon in the strong text colour.
 pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &str) -> Response {
+	toggle_tinted(ui, icon, size, active, label, None)
+}
+
+/// Like [`toggle`]; an active toggle paints in `active_color` (e.g. danger red) when given.
+pub fn toggle_tinted(
+	ui: &mut egui::Ui,
+	icon: Icon,
+	size: f32,
+	active: bool,
+	label: &str,
+	active_color: Option<Color32>,
+) -> Response {
 	let label = crate::i18n::translate_if_key(label);
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
 	if response.hovered() || response.has_focus() {
 		ui.painter().rect_filled(rect, 6, colors.hover);
 	}
-	let color = if active || response.hovered() || response.has_focus() {
+	let color = if let Some(tint) = active_color.filter(|_| active) {
+		tint
+	} else if active || response.hovered() || response.has_focus() {
 		colors.text_strong
 	} else {
 		colors.muted
@@ -517,6 +531,24 @@ pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &st
 		egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, &label)
 	});
 	response.on_hover_text(&label)
+}
+
+/// A bell with a small "z": marks a message sent silently (no notifications), like Discord.
+pub fn silent_bell(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
+	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+	let bell = Rect::from_min_size(
+		rect.left_bottom() - Vec2::new(0.0, size * 0.8),
+		Vec2::splat(size * 0.8),
+	);
+	paint(ui.painter(), Icon::Bell, bell, color);
+	ui.painter().text(
+		rect.right_top() + Vec2::new(0.0, -size * 0.1),
+		egui::Align2::RIGHT_TOP,
+		"z",
+		egui::FontId::proportional(size * 0.55),
+		color,
+	);
+	response
 }
 
 /// Inline glyph used beside labels (channel kinds, section headers).
