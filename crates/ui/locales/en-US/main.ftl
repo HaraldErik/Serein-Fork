@@ -4644,14 +4644,28 @@ member-in-voice = In voice
 settings-chat-box = Chat Box
 settings-convert-emoticons = Automatically convert emoticons in your messages to emoji
 settings-convert-emoticons-description = Convert standalone emoticons such as :) to 🙂 when sending or editing messages. Code and links stay unchanged.
-settings-clear-urls = Remove tracking from links
-settings-clear-urls-description = Strip tracking parameters such as utm_source, fbclid and YouTube or Spotify si= from links when sending. Code stays unchanged.
-settings-send-timestamps = Send times as timestamps
-settings-send-timestamps-description = Write a time in backticks, like `18:30` or `6:30 pm`, and it is sent as a timestamp that everyone sees in their own time zone.
-settings-silent-message-toggle = Silent message button
-settings-silent-message-toggle-description = Show a bell next to Send. While it is lit, your next message is sent without notifications.
 lib-silent-toggle-off = Send next message silently
 lib-silent-toggle-on = Next message is silent (click to cancel)
+builtin-extensions-title = Built-in
+builtin-extensions-community = Community plugins
+builtin-extensions-config = Config
+builtin-extensions-hint = Built-in extensions ship with Serein-Fork because the plugin sandbox cannot do what they need (audio, composer buttons, send rewrites). Turn each one on or off here; Config holds its options.
+builtin-also-on-edits = Also apply when editing a message
+builtin-volume-booster = Volume Booster
+builtin-volume-booster-description = Lets user and stream volume in calls go above 200%. Loud peaks are softened instead of clipping.
+builtin-volume-booster-max = Maximum volume
+builtin-volume-booster-max-hint = Off, or a lower maximum, caps louder saved volumes without forgetting them.
+builtin-clear-urls = ClearURLs
+builtin-clear-urls-description = Removes tracking parameters such as utm_source and fbclid from links when you send them. Links inside code stay unchanged.
+builtin-clear-urls-site-rules = Site-specific rules
+builtin-clear-urls-site-rules-description = Also remove YouTube and Spotify si=, X s= and t=, TikTok and Reddit share trackers. YouTube t= (start time) is kept.
+builtin-send-timestamps = Send Timestamps
+builtin-send-timestamps-description = Write a time in backticks, like `18:30` or `6:30 pm`, and it is sent as a timestamp everyone sees in their own time zone.
+builtin-send-timestamps-style = How the timestamp looks
+builtin-silent-toggle = Silent Message Toggle
+builtin-silent-toggle-description = Adds a bell next to Send. While it is lit, messages are sent without notifications.
+builtin-silent-toggle-auto-disable = Turn off after sending
+builtin-silent-toggle-auto-disable-description = The bell switches off after one silent message.
 settings-preload-on-hover = Preload on hover
 settings-preload-on-hover-description = Load a conversation, a profile or the GIF picker while the pointer rests on it, so it opens instantly. Uses the same requests as opening it, at most 12 per minute for each kind.
 
