@@ -138,12 +138,11 @@ fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 	png(&image.bytes, image.width, image.height)
 }
 
-const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
-
 /// KDE and browsers often offer only `image/jpeg` or `image/webp`; arboard reads just PNG.
 #[cfg(target_os = "linux")]
 fn other_image() -> Option<image::RgbaImage> {
 	use std::io::Read;
+	const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
 	use wl_clipboard_rs::paste::{
 		ClipboardType, MimeType, Seat, get_contents, get_mime_types_ordered,
 	};

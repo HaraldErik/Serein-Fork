@@ -137,11 +137,13 @@ permissions it asks for, enable it. The catalog tab lists reviewed packages. Dis
 package and its data.
 
 **What they can do (today):** show native panels, read data Serein already loaded (selected channel,
-messages, members, voice state…), edit your draft, save one small value, react to message and app
+messages, members, voice state…), edit your draft, **rewrite messages when you press Send**, add **`/slash` commands**, save one small value, react to message and app
 events, change appearance, add a custom presence, **put badges and text beside message authors**, and
 *propose* actions (send, edit, react, navigate, moderate…) that run only after you click **Apply**.
 
-**What they cannot do:** read your token, touch files, use the network, or run while the UI is drawing.
+**What they cannot do:** read your token, touch files, open their own connections, upload anything, or
+run while the UI is drawing. With your consent, Serein can *download* data for a plugin from the
+specific sites it lists (pull-only).
 Each call gets a fresh sandbox: 16 MiB memory, a fixed CPU budget, 256 KiB of input/output. This is why
 plugins cost almost no idle RAM. Up to 64 plugins can be installed.
 
@@ -157,9 +159,9 @@ cd ../.. && cargo run --locked --features demo -- --demo      # then import the 
 ```
 
 Read the **[Plugin guide](docs/plugin-guide.md)** for the manifest, actions, permissions, limits, testing
-and the decorations API, and browse the [example plugins](examples/extensions). The
-[roadmap](docs/plugin-api-v2.md) lists what is planned next (UI buttons and menus, send hooks and
-commands, timers, pull-only network access, limited auto-apply) and what will never be supported.
+and the preview APIs (decorations, send hooks, slash commands, pull-only downloads, timers), and browse
+the [example plugins](examples/extensions). The [roadmap](docs/plugin-api-v2.md) lists what is planned
+next (more UI buttons and menus, limited auto-apply) and what will never be supported.
 
 ## Troubleshooting
 
@@ -291,7 +293,7 @@ serein/
 - **Token Protection:** Tokens use the native OS credential store by default (macOS Keychain, Windows Credential Manager, Linux Secret Service). An explicit Storage setting allows private, bounded plaintext files when OS saving fails; disabling it deletes those secret files. Active tokens remain redacted in memory.
 - **Local Cache Bounds:** SQLite databases store recent channel history, drafts, settings, diagnostics, and image preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
 - **Sanitary Logout:** Executing an explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
-- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons. Planned plugin network access (see [Plugin API v2](docs/plugin-api-v2.md)) is pull-only HTTPS GET to user-approved hosts; Serein never uploads data to a service of its own.
+- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons. Plugin network access (preview, see the [plugin guide](docs/plugin-guide.md#downloading-data-preview-pull-only)) is pull-only HTTPS GET to hosts you approve; Serein never uploads data to a service of its own.
 - **Platform Integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays.
 
 For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).

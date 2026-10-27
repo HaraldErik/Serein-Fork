@@ -29,8 +29,32 @@ v1 plugins only answer a user action or app event with one JSON result. They can
 - `decorations` capability. A `message_event` handler returns `decoration` (SDK:
   `DecorationOutput`); the host validates it, stores it in the bounded cache and the timeline
   paints badges/prefix/suffix beside the author name in the normal (non-compact) layout.
-- Not yet: compact layout, user/server decorations, blur/collapse/hide, and a plugin
-  invocation for messages that were already loaded before the plugin was enabled.
+- `presentation` (blur/collapse/hide) replaces the body with a click-to-show placeholder; the
+  row-height cache includes that state so the virtualized timeline stays correct.
+- Decorations are dropped when their plugin is disabled and on every account change.
+- `before_send` surface (requires `composer`): runs every enabled send plugin in plugin-ID order when
+  the user presses Send, then sends the rewritten draft. Failure, disable, a 15-second timeout, an
+  edited draft or a conversation switch cancels the send and keeps the draft. Output is limited to
+  `replacement` and `storage`. Example: `examples/extensions/text-replace`.
+- `command` surface (requires `composer`): `/<action id> arguments` typed in the composer runs the
+  plugin; a `replacement` becomes the draft (never sent automatically) and panels/proposals are
+  shown as usual. Built-ins and server commands win name clashes. Example:
+  `examples/extensions/fun-commands`. Listed in the slash suggestions next to the built-ins.
+- `decorate` surface (requires `decorations` + `message_events`): the host offers up to 32 loaded
+  messages (48 KiB of text) of the selected conversation whenever that set changes, through the same
+  bounded, rate-limited event queue; the plugin returns per-message `decorations` whose IDs must come
+  from the batch. A newer batch replaces one that has not run yet.
+- `network` capability + `fetch_result` surface: manifest `network_hosts` (≤ 8 exact public names,
+  shown at consent); a `fetch` output becomes one host-performed HTTPS GET (64 KiB, 15 s, redirects
+  only to listed hosts, no cookies/body/credentials, public-IP pinning), at most one in flight and
+  10/minute per plugin; the result goes to `fetch_result`, which may save storage, and shows a panel
+  only for foreground-started requests. See `docs/threat-model.md`. Example: `github-zen`. The
+  extension catalog still accepts only its narrower reviewed capability set.
+- `schedule` surface: queued through the reactive event queue about every 60 s per plugin (first run
+  on enable), with `tick_ms` = time since enabling; output limited to `storage`, `appearance` and
+  `fetch`. A pending run is never duplicated.
+- Not yet: compact layout, user/server decorations, a real visual blur, UI buttons/menus beyond the
+  existing message and composer menus, auto-apply.
 
 ## New plugin surfaces
 

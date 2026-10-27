@@ -127,7 +127,7 @@ Unknown API versions and invalid packages are rejected before installation.
 
 Each capability is independent and requires user consent. An update requests
 renewed consent; adding a read grant does not grant commands. The SDK currently
-supports 54 capabilities, with at most 64 distinct declarations per manifest.
+supports 55 capabilities, with at most 64 distinct declarations per manifest.
 
 > **Preview SDK — PR #411, not yet released.** `channel_control`,
 > `server_control`, `role_control`, `moderation_control` and `media_control`, plus
@@ -158,7 +158,8 @@ supports 54 capabilities, with at most 64 distinct declarations per manifest.
 | `member_details` | Read loaded guild member nicknames, role labels and matching server profile | Fresh selected member pane; 20 members/32 role IDs each/32 catalog roles; 6 KiB; no fetch |
 | `message_details` | Read loaded message metadata: replies, mentions, attachment labels and reaction counts | Fresh readable selected timeline; at most 20 messages (12 with `timeline`); no text or URLs |
 | `relationships` | Read loaded friends, requests and restricted-account labels | Connected; at most 100; known flags distinguish unloaded lists; no fetch |
-| `decorations` | Preview: a `message_event` handler may return a `decoration` (up to 4 badges, a 64-byte prefix/suffix) for the message that triggered it | Shown beside the author name from a 4 MiB / 2,048-item host cache; the UI never calls the plugin. `presentation` (blur/collapse/hide) is validated but not yet applied |
+| `decorations` | Preview: a `message_event` handler may return a `decoration` (up to 4 badges, a 64-byte prefix/suffix) for the message that triggered it; a `decorate` action (also needs `message_events`) receives up to 32 loaded messages and returns per-message `decorations` | Shown beside the author name from a 4 MiB / 2,048-item host cache; the UI never calls the plugin. `presentation` (blur/collapse/hide) replaces the body with a click-to-show placeholder; decorations are cleared on disable and account change |
+| `network` | Preview: pull-only HTTPS GET to the manifest's `network_hosts`, results delivered to a `fetch_result` action | Up to 8 listed hosts shown at consent; 64 KiB, 15 s, one in flight and 10/minute per plugin; no cookies, body or credentials; redirects only to listed hosts |
 | `timeline` | Read ordinary loaded messages in the active conversation | Fresh readable timeline, at most 50 (12 with `message_details`); no deleted/ephemeral text |
 | `members` | Read loaded members or DM recipients | Active channel, at most 100; no fetch |
 | `presence` | Read cached status strings for that context | At most 100; no activity/private device payloads |
@@ -479,7 +480,7 @@ invocation input/output, panel complexity, queues and plugin storage.
 | Execution fuel | 10,000,000 | Shared by parsing and execution; a valid-sized input can still exhaust it. |
 | Wasm call depth / interpreter stack | 128 calls / 256 KiB | Avoid deep recursion. |
 | Serialized input and output | 256 KiB each | Count UTF-8 and JSON escaping, including nested storage JSON. |
-| Manifest actions / capabilities | 16 / 64 distinct | Only the 54 supported capability names are currently accepted. |
+| Manifest actions / capabilities | 16 / 64 distinct | Only the 55 supported capability names are currently accepted. |
 | Panel | 64 elements / 8 row levels | Includes nested children; text and input values are at most 4 KiB each. |
 | Plugin storage on disk | 1 MiB | Its practical size must also fit the smaller invocation/output budget. |
 | App snapshot | 64 KiB | Individual lists have smaller budgets; see the [data reference](extension-sdk-reference.md#app-data). |

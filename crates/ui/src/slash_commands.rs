@@ -46,7 +46,9 @@ pub(super) struct Menu {
 	channel: Option<Id>,
 	generation: u64,
 	query: Option<String>,
-	stamp: (u64, bool, usize, bool, bool, bool),
+	stamp: (u64, bool, usize, bool, bool, bool, usize),
+	/// Enabled plugins' commands, listed with the built-ins.
+	pub(crate) plugin_commands: std::sync::Arc<Vec<crate::extensions_ui::PluginCommand>>,
 	filter: Filter,
 	items: Vec<Pick>,
 	applications: std::collections::BTreeSet<Id>,
@@ -67,7 +69,10 @@ pub(super) struct Menu {
 impl Menu {
 	pub fn suspend(&mut self, state: &State, channel: Id) {
 		if self.channel != Some(channel) || self.generation != state.generation {
-			*self = Self::default();
+			*self = Self {
+				plugin_commands: std::mem::take(&mut self.plugin_commands),
+				..Self::default()
+			};
 		}
 		self.enabled = false;
 		self.rect = None;
@@ -103,6 +108,7 @@ impl Menu {
 			*self = Self {
 				channel: Some(channel),
 				generation: state.generation,
+				plugin_commands: std::mem::take(&mut self.plugin_commands),
 				..Self::default()
 			};
 		}
@@ -133,6 +139,7 @@ impl Menu {
 			state.can_compose(channel),
 			state.can_request_application_commands(channel),
 			state.can_view(channel),
+			std::sync::Arc::as_ptr(&self.plugin_commands) as usize,
 		);
 		if self.query == query && self.stamp == stamp {
 			return;
@@ -167,6 +174,29 @@ impl Menu {
 						name: entry.name.into(),
 						description: entry.description.into(),
 						application: "Built-In".into(),
+						application_id: None,
+						icon: None,
+					});
+				}
+			}
+		}
+		if matches!(self.filter, Filter::All | Filter::Builtins) && state.can_compose(channel) {
+			for command in self.plugin_commands.iter() {
+				if slash_builtin::ALL
+					.iter()
+					.any(|entry| entry.name == command.name)
+				{
+					continue;
+				}
+				if command.name.contains(query)
+					|| command.description.to_lowercase().contains(query)
+				{
+					self.items.push(Pick {
+						id: None,
+						path: Vec::new(),
+						name: command.name.clone(),
+						description: command.description.clone(),
+						application: format!("Plugin · {}", command.plugin),
 						application_id: None,
 						icon: None,
 					});
@@ -1483,6 +1513,34 @@ impl crate::MessagingUi {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn plugin_commands_are_suggested_but_never_shadow_builtins() {
+		let state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		let mut menu = Menu::default();
+		let command = |name: &str| crate::extensions_ui::PluginCommand {
+			name: name.into(),
+			description: format!("Plugin {name}"),
+			plugin: "Fun".into(),
+		};
+		menu.plugin_commands = std::sync::Arc::new(vec![command("mock"), command("shrug")]);
+		menu.refresh(&state, channel, "/", true);
+		let plugin: Vec<_> = menu
+			.items
+			.iter()
+			.filter(|pick| pick.application == "Plugin · Fun")
+			.map(|pick| pick.name.as_str())
+			.collect();
+		assert_eq!(plugin, ["mock"]);
+		// A new plugin list is picked up without retyping the query.
+		menu.plugin_commands = std::sync::Arc::new(Vec::new());
+		menu.refresh(&state, channel, "/", true);
+		assert!(
+			menu.items
+				.iter()
+				.all(|pick| pick.application != "Plugin · Fun")
+		);
+	}
 	#[test]
 	fn slash_picker_selects_before_sending_and_preserves_failed_fields() {
 		for (width, theme) in [(1000.0, egui::Theme::Dark), (390.0, egui::Theme::Light)] {

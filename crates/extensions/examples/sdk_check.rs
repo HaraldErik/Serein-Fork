@@ -54,6 +54,82 @@ fn rebuilt(manifest: &str, path: &Path) -> Result<Package, Box<dyn std::error::E
 	})
 }
 
+fn check_text_replace(name: &str, package: &Package) {
+	package.validate().expect("text replace package is valid");
+	let send = Invocation {
+		action: "send".into(),
+		composer: Some("teh end".into()),
+		storage: Some("teh=the".into()),
+		..Default::default()
+	};
+	send.validate(&package.manifest)
+		.expect("before_send input is valid");
+	let output = invoke(package, &send).expect("before_send succeeds");
+	output
+		.validate(&package.manifest, &send)
+		.expect("before_send output is accepted");
+	assert_eq!(output.replacement.as_deref(), Some("the end"), "{name}");
+	assert!(
+		output.panel.is_empty() && output.effects.is_empty(),
+		"{name}"
+	);
+	println!("{name}: before_send rewrite validated in the host sandbox");
+}
+
+fn check_github_zen(name: &str, package: &Package) {
+	package.validate().expect("network package is valid");
+	let ask = Invocation {
+		action: "fetch".into(),
+		..Default::default()
+	};
+	let output = invoke(package, &ask).expect("fetch request succeeds");
+	output
+		.validate(&package.manifest, &ask)
+		.expect("fetch request is accepted");
+	let request = output.fetch.expect("a fetch is requested");
+	let reply = Invocation {
+		action: "fetched".into(),
+		fetch_result: Some(Box::new(extensions::FetchResult {
+			id: request.id,
+			url: request.url,
+			body: Some("Design for failure.".into()),
+			error: None,
+		})),
+		..Default::default()
+	};
+	reply
+		.validate(&package.manifest)
+		.expect("fetch result input is valid");
+	let output = invoke(package, &reply).expect("fetch result succeeds");
+	output
+		.validate(&package.manifest, &reply)
+		.expect("fetch result output is accepted");
+	assert_eq!(
+		output.storage.as_deref(),
+		Some("Design for failure."),
+		"{name}"
+	);
+	println!("{name}: fetch request and result validated in the host sandbox");
+}
+
+fn check_fun_commands(name: &str, package: &Package) {
+	package.validate().expect("command package is valid");
+	let command = Invocation {
+		action: "mock".into(),
+		composer: Some("hi you".into()),
+		..Default::default()
+	};
+	command
+		.validate(&package.manifest)
+		.expect("command input is valid");
+	let output = invoke(package, &command).expect("command succeeds");
+	output
+		.validate(&package.manifest, &command)
+		.expect("command output is accepted");
+	assert_eq!(output.replacement.as_deref(), Some("Hi YoU"), "{name}");
+	println!("{name}: command result validated in the host sandbox");
+}
+
 fn check_link_badges(name: &str, package: &Package) {
 	package.validate().expect("badge package is valid");
 	let event = |content: &str| Invocation {
@@ -76,6 +152,34 @@ fn check_link_badges(name: &str, package: &Package) {
 		plain.decoration.is_none(),
 		"{name}: plain text must stay undecorated"
 	);
+	let loaded = |id: &str, content: &str| MessageEvent {
+		kind: MessageEventKind::Create,
+		channel_id: "100".into(),
+		message_id: id.into(),
+		author_id: Some("300".into()),
+		content: Some(content.into()),
+	};
+	let batch = Invocation {
+		action: "decorate".into(),
+		messages: Some(Box::new(vec![
+			loaded("201", "plain"),
+			loaded("202", "https://example.com"),
+		])),
+		..Default::default()
+	};
+	batch
+		.validate(&package.manifest)
+		.expect("decorate input is valid");
+	let output = invoke(package, &batch).expect("decorate batch succeeds");
+	output
+		.validate(&package.manifest, &batch)
+		.expect("decorate output is accepted");
+	let ids: Vec<_> = output
+		.decorations
+		.iter()
+		.map(|item| item.message_id.as_str())
+		.collect();
+	assert_eq!(ids, ["202"], "{name}: only the link is decorated");
 	println!("{name}: decorations validated in the host sandbox");
 }
 
@@ -596,6 +700,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			package.wasm.len()
 		);
 	}
+	check_github_zen(
+		"github-zen/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/github-zen.serein-extension"
+		))?,
+	);
+	check_github_zen(
+		"github-zen/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/github-zen/manifest.json"),
+			&wasm_dir.join("github_zen.wasm"),
+		)?,
+	);
+	check_fun_commands(
+		"fun-commands/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/fun-commands.serein-extension"
+		))?,
+	);
+	check_fun_commands(
+		"fun-commands/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/fun-commands/manifest.json"),
+			&wasm_dir.join("fun_commands.wasm"),
+		)?,
+	);
+	check_text_replace(
+		"text-replace/committed",
+		&parse_package(include_bytes!(
+			"../../../examples/extensions/packages/text-replace.serein-extension"
+		))?,
+	);
+	check_text_replace(
+		"text-replace/rebuilt",
+		&rebuilt(
+			include_str!("../../../examples/extensions/text-replace/manifest.json"),
+			&wasm_dir.join("text_replace.wasm"),
+		)?,
+	);
 	check_link_badges(
 		"link-badges/committed",
 		&parse_package(include_bytes!(

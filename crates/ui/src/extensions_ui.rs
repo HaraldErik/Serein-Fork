@@ -153,6 +153,28 @@ struct PreviewImage {
 	used: u64,
 	loading: bool,
 }
+/// `before_send` plugins run one at a time on the extension worker; the composer sends the
+/// rewritten text once they all finish, or keeps the draft untouched if any step fails.
+struct SendChain {
+	generation: u64,
+	channel: Id,
+	original: String,
+	text: String,
+	remaining: std::collections::VecDeque<(String, String)>,
+	waiting: Option<String>,
+	ready: bool,
+	started: std::time::Instant,
+}
+const SEND_CHAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// A slash command an enabled plugin offers, for the composer's suggestion list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PluginCommand {
+	pub name: String,
+	pub description: String,
+	pub plugin: String,
+}
+
 #[derive(Default)]
 pub struct ExtensionUi {
 	pub proxy_auth: crate::proxy_auth::Form,
@@ -166,7 +188,9 @@ pub struct ExtensionUi {
 	result: Option<ResultPanel>,
 	error: Option<String>,
 	message_actions: Arc<Vec<MenuAction>>,
+	commands: Arc<Vec<PluginCommand>>,
 	decorations: crate::plugin_decorations::SharedCache,
+	send_chain: Option<SendChain>,
 	themes: bool,
 	query: String,
 	previews: BTreeMap<String, PreviewImage>,
@@ -470,6 +494,9 @@ impl ExtensionUi {
 			self.theme_editor = Some(editor);
 		}
 	}
+	pub(crate) fn plugin_commands(&self) -> Arc<Vec<PluginCommand>> {
+		self.commands.clone()
+	}
 	pub fn set_entries(&mut self, entries: Vec<ExtensionEntry>) {
 		if self.consent.as_ref().is_some_and(|consent| {
 			consent.entry.reviewed
@@ -493,6 +520,27 @@ impl ExtensionUi {
 						== new.cover_image.as_ref().map(Arc::as_ptr))
 		});
 		self.entries = entries;
+		// The lowest plugin ID owns a name, matching `run_plugin_command`.
+		let mut enabled: Vec<_> = self.entries.iter().filter(|entry| entry.enabled).collect();
+		enabled.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+		let mut commands: Vec<PluginCommand> = Vec::new();
+		for entry in enabled {
+			for action in entry
+				.manifest
+				.actions
+				.iter()
+				.filter(|action| action.surface == Surface::Command)
+			{
+				if !commands.iter().any(|known| known.name == action.id) {
+					commands.push(PluginCommand {
+						name: action.id.clone(),
+						description: action.label.clone(),
+						plugin: entry.manifest.name.clone(),
+					});
+				}
+			}
+		}
+		self.commands = Arc::new(commands);
 		self.message_actions = Arc::new(
 			self.entries
 				.iter()
@@ -857,6 +905,11 @@ impl ExtensionUi {
 		};
 	}
 	pub fn reset_runtime(&mut self) {
+		// Decorations and pending sends describe the previous account's messages.
+		if let Ok(mut cache) = self.decorations.lock() {
+			cache.clear();
+		}
+		self.send_chain = None;
 		self.catalog_refreshing = false;
 		self.theme_editor = None;
 		self.gallery_preview = None;
@@ -884,9 +937,210 @@ impl ExtensionUi {
 			let _ = cache.insert(plugin, message.0, decoration);
 		}
 	}
+	/// Starts the enabled `before_send` plugins for the selected draft. `true` means the send
+	/// waits for them (or for an earlier run); `false` means send now.
+	pub(crate) fn start_send_hooks(&mut self, ctx: &egui::Context, state: &State) -> bool {
+		if self.send_chain.is_some() {
+			self.status = "Send plugins are still running.".into();
+			return true;
+		}
+		let Some(channel) = state.selected else {
+			return false;
+		};
+		let draft = state.drafts.get(&channel).cloned().unwrap_or_default();
+		if draft.is_empty() {
+			return false;
+		}
+		let mut hooks: Vec<_> = self
+			.entries
+			.iter()
+			.filter(|entry| entry.enabled)
+			.flat_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.filter(|action| action.surface == Surface::BeforeSend)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		if hooks.is_empty() {
+			return false;
+		}
+		hooks.sort();
+		self.send_chain = Some(SendChain {
+			generation: state.generation,
+			channel,
+			text: draft.clone(),
+			original: draft,
+			remaining: hooks.into(),
+			waiting: None,
+			ready: false,
+			started: std::time::Instant::now(),
+		});
+		self.dispatch_send_hook(ctx, state);
+		true
+	}
+	fn dispatch_send_hook(&mut self, ctx: &egui::Context, state: &State) {
+		let Some(chain) = &mut self.send_chain else {
+			return;
+		};
+		let Some((id, action)) = chain.remaining.pop_front() else {
+			chain.waiting = None;
+			chain.ready = true;
+			ctx.request_repaint();
+			return;
+		};
+		chain.waiting = Some(id.clone());
+		let invocation = Invocation {
+			action,
+			composer: Some(chain.text.clone()),
+			..Default::default()
+		};
+		let before = self.requests.len();
+		self.queue(
+			ctx,
+			ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context: ExtensionContext::capture(state, true),
+			},
+		);
+		if self.requests.len() == before {
+			self.abort_send_hooks("Send plugins are busy; your draft was kept. Press Send again.");
+		}
+	}
+	/// Runs an enabled plugin's `/name arguments` command. `false` when no plugin owns `name`.
+	/// The plugin's `replacement` becomes the new draft; the user still presses Send.
+	pub(crate) fn run_plugin_command(&mut self, ctx: &egui::Context, state: &State) -> bool {
+		let Some(draft) = state
+			.selected
+			.and_then(|channel| state.drafts.get(&channel))
+		else {
+			return false;
+		};
+		let Some(rest) = draft.strip_prefix('/') else {
+			return false;
+		};
+		let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+		let (name, arguments) = (&rest[..end], rest[end..].trim_start());
+		let mut owners: Vec<_> = self
+			.entries
+			.iter()
+			.filter(|entry| entry.enabled)
+			.filter(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.any(|action| action.surface == Surface::Command && action.id == name)
+			})
+			.map(|entry| entry.manifest.id.clone())
+			.collect();
+		owners.sort();
+		let Some(id) = owners.into_iter().next() else {
+			return false;
+		};
+		let invocation = Invocation {
+			action: name.to_owned(),
+			composer: Some(arguments.to_owned()),
+			..Default::default()
+		};
+		self.status = format!("Running /{name}…");
+		self.queue(
+			ctx,
+			ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context: ExtensionContext::capture(state, true),
+			},
+		);
+		true
+	}
+	/// Puts a command's `replacement` in the draft that ran it, within the draft budget.
+	pub fn apply_command_output(
+		&mut self,
+		state: &mut State,
+		context: &ExtensionContext,
+		replacement: String,
+	) {
+		let Some(channel) = context.channel.filter(|_| context.is_current(state)) else {
+			self.status =
+				"Command result discarded because the conversation or draft changed.".into();
+			return;
+		};
+		let old = state.drafts.get(&channel).map_or(0, String::capacity);
+		if state.draft_bytes().saturating_sub(old) + replacement.len()
+			> client_core::MAX_DRAFT_BYTES
+		{
+			self.status = "Command result exceeds the draft budget; your draft was kept.".into();
+			return;
+		}
+		state.drafts.insert(channel, replacement);
+		self.status = "Command result is in your draft. Press Send to post it.".into();
+	}
+	/// The plugin the send chain waits for, if any.
+	pub fn send_hook_waiting(&self) -> Option<&str> {
+		self.send_chain
+			.as_ref()
+			.and_then(|chain| chain.waiting.as_deref())
+	}
+	/// Applies one `before_send` result; a stale draft or conversation cancels the send.
+	pub fn send_hook_output(
+		&mut self,
+		ctx: &egui::Context,
+		id: &str,
+		context: &ExtensionContext,
+		replacement: Option<String>,
+		state: &State,
+	) {
+		if self.send_hook_waiting() != Some(id) {
+			return;
+		}
+		if !context.is_current(state) {
+			self.abort_send_hooks("Draft changed while send plugins ran; press Send again.");
+			return;
+		}
+		if let Some(chain) = &mut self.send_chain
+			&& let Some(text) = replacement
+		{
+			chain.text = text;
+		}
+		self.dispatch_send_hook(ctx, state);
+	}
+	pub fn abort_send_hooks(&mut self, reason: &str) {
+		if self.send_chain.take().is_some() {
+			self.status = reason.into();
+		}
+	}
+	/// The rewritten draft, once every send plugin finished for the still-current draft.
+	pub(crate) fn take_ready_send(&mut self, state: &State) -> Option<(Id, String)> {
+		let chain = self.send_chain.as_ref()?;
+		if !chain.ready {
+			if chain.started.elapsed() > SEND_CHAIN_TIMEOUT {
+				self.abort_send_hooks("A send plugin took too long; your draft was kept.");
+			}
+			return None;
+		}
+		let chain = self.send_chain.take()?;
+		if chain.generation != state.generation
+			|| state.selected != Some(chain.channel)
+			|| state.drafts.get(&chain.channel) != Some(&chain.original)
+		{
+			self.status = "Draft changed while send plugins ran; press Send again.".into();
+			return None;
+		}
+		Some((chain.channel, chain.text))
+	}
 	pub fn remove_runtime(&mut self, id: &str) {
 		if let Ok(mut cache) = self.decorations.lock() {
 			cache.remove_plugin(id);
+		}
+		if self.send_chain.as_ref().is_some_and(|chain| {
+			chain.waiting.as_deref() == Some(id)
+				|| chain.remaining.iter().any(|(hook, _)| hook == id)
+		}) {
+			self.abort_send_hooks("A send plugin was disabled; your draft was kept.");
 		}
 		if self.result.as_ref().is_some_and(|result| result.id == id) {
 			self.result = None;
@@ -2081,9 +2335,16 @@ impl ExtensionUi {
 					ui.spacing_mut().item_spacing.y = 8.0;
 					for capability in &consent.entry.manifest.capabilities {
 						let mut granted = consent.grants.contains(capability);
-						let changed =
-							design::switch(ui, capability_label(*capability), None, &mut granted)
-								.changed();
+						// The host list is part of what the user agrees to.
+						let label = if *capability == Capability::Network {
+							format!(
+								"Download data from {} (nothing is uploaded, but those sites see the addresses requested and your IP)",
+								consent.entry.manifest.network_hosts.join(", ")
+							)
+						} else {
+							capability_label(*capability).to_owned()
+						};
+						let changed = design::switch(ui, &label, None, &mut granted).changed();
 						if changed {
 							if granted {
 								consent.grants.push(*capability);
@@ -2775,6 +3036,7 @@ fn capability_label(capability: Capability) -> &'static str {
 			"Read loaded message replies, mentions, attachment metadata and reactions"
 		}
 		Capability::Decorations => "Add badges and text beside messages",
+		Capability::Network => "Download data from the sites this plugin lists",
 		Capability::Relationships => "Read my loaded friends, requests, blocked and ignored users",
 		Capability::Timeline => "Read loaded messages in the active conversation",
 		Capability::Members => "Read loaded members of the active conversation",
@@ -2962,6 +3224,35 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn decorations_leave_with_their_plugin_and_never_survive_an_account_change() {
+		let mut ui = ExtensionUi::default();
+		let badge = || extensions::Decoration {
+			badges: vec![extensions::Badge {
+				text: "TAG".into(),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		ui.decorate_message("a", "10", badge());
+		ui.decorate_message("b", "10", badge());
+		ui.decorate_message("a", "not-an-id", badge());
+		let shared = ui.decorations();
+		assert_eq!(shared.lock().unwrap().len(), 2);
+		ui.remove_runtime("a");
+		assert_eq!(
+			shared
+				.lock()
+				.unwrap()
+				.get(10)
+				.map(|(id, _)| id)
+				.collect::<Vec<_>>(),
+			["b"]
+		);
+		ui.reset_runtime();
+		assert!(shared.lock().unwrap().is_empty());
+	}
+
+	#[test]
 	fn app_snapshot_payloads_are_bounded_before_ui_queueing() {
 		let ctx = egui::Context::default();
 		let state = test_support::demo_state();
@@ -3037,6 +3328,7 @@ mod tests {
 				kind: ExtensionKind::Plugin,
 				capabilities: vec![Capability::Composer],
 				actions: vec![],
+				network_hosts: Vec::new(),
 			},
 			reviewed: false,
 			sha256: "a".repeat(64),
@@ -3047,6 +3339,110 @@ mod tests {
 			update_manifest: None,
 		}
 	}
+	#[test]
+	fn send_plugins_run_in_order_and_never_send_a_stale_draft() {
+		let ctx = egui::Context::default();
+		let mut state = client_core::State {
+			selected: Some(Id(7)),
+			..Default::default()
+		};
+		state.drafts.insert(Id(7), "teh draft".into());
+		let mut ui = ExtensionUi::default();
+		for id in ["b.second", "a.first"] {
+			let mut plugin = entry();
+			plugin.enabled = true;
+			plugin.manifest.id = id.into();
+			plugin.manifest.actions = vec![extensions::Action {
+				id: "send".into(),
+				label: "Rewrite".into(),
+				surface: Surface::BeforeSend,
+			}];
+			ui.entries.push(plugin);
+		}
+		let invoked = |ui: &ExtensionUi| match ui.requests.last() {
+			Some(ExtensionRequest::Invoke {
+				id,
+				invocation,
+				context,
+			}) => (id.clone(), invocation.composer.clone(), context.clone()),
+			_ => panic!("expected a send plugin invocation"),
+		};
+		assert!(ui.start_send_hooks(&ctx, &state));
+		let (id, composer, context) = invoked(&ui);
+		assert_eq!(
+			(id.as_str(), composer.as_deref()),
+			("a.first", Some("teh draft"))
+		);
+		// A result from another plugin is ignored; the chain still waits for `a.first`.
+		ui.send_hook_output(&ctx, "b.second", &context, Some("wrong".into()), &state);
+		ui.send_hook_output(&ctx, "a.first", &context, Some("the draft".into()), &state);
+		let (id, composer, context) = invoked(&ui);
+		assert_eq!(
+			(id.as_str(), composer.as_deref()),
+			("b.second", Some("the draft"))
+		);
+		assert!(ui.take_ready_send(&state).is_none());
+		ui.send_hook_output(&ctx, "b.second", &context, None, &state);
+		assert_eq!(
+			ui.take_ready_send(&state),
+			Some((Id(7), "the draft".to_owned()))
+		);
+
+		// Typing during the run cancels it and keeps the newer draft.
+		assert!(ui.start_send_hooks(&ctx, &state));
+		let (_, _, context) = invoked(&ui);
+		state.drafts.insert(Id(7), "edited meanwhile".into());
+		ui.send_hook_output(&ctx, "a.first", &context, Some("x".into()), &state);
+		assert!(ui.send_hook_waiting().is_none());
+		assert!(ui.take_ready_send(&state).is_none());
+
+		// Disabling a plugin that is part of the run cancels it as well.
+		assert!(ui.start_send_hooks(&ctx, &state));
+		ui.remove_runtime("b.second");
+		assert!(ui.send_hook_waiting().is_none());
+	}
+
+	#[test]
+	fn plugin_commands_fill_the_draft_only_while_it_is_unchanged() {
+		let ctx = egui::Context::default();
+		let mut state = client_core::State {
+			selected: Some(Id(7)),
+			..Default::default()
+		};
+		let mut ui = ExtensionUi::default();
+		for (id, enabled) in [("b.owner", true), ("a.disabled", false)] {
+			let mut plugin = entry();
+			plugin.enabled = enabled;
+			plugin.manifest.id = id.into();
+			plugin.manifest.actions = vec![extensions::Action {
+				id: "mock".into(),
+				label: "Mock".into(),
+				surface: Surface::Command,
+			}];
+			ui.entries.push(plugin);
+		}
+		state.drafts.insert(Id(7), "/unknown hi".into());
+		assert!(!ui.run_plugin_command(&ctx, &state));
+		state.drafts.insert(Id(7), "/mock  hello world".into());
+		assert!(ui.run_plugin_command(&ctx, &state));
+		let Some(ExtensionRequest::Invoke {
+			id,
+			invocation,
+			context,
+		}) = ui.requests.pop()
+		else {
+			panic!("expected a command invocation");
+		};
+		assert_eq!(id, "b.owner", "disabled plugins never own a command");
+		assert_eq!(invocation.action, "mock");
+		assert_eq!(invocation.composer.as_deref(), Some("hello world"));
+		ui.apply_command_output(&mut state, &context, "hElLo WoRlD".into());
+		assert_eq!(state.drafts[&Id(7)], "hElLo WoRlD");
+		// A second result for the old draft is stale and must not overwrite newer text.
+		ui.apply_command_output(&mut state, &context, "late".into());
+		assert_eq!(state.drafts[&Id(7)], "hElLo WoRlD");
+	}
+
 	#[test]
 	fn catalog_refresh_preserves_only_unchanged_reviewed_consent() {
 		let mut shop = ExtensionUi::default();

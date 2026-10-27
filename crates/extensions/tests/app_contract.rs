@@ -56,6 +56,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Capability::MessageDetails,
 		Capability::Relationships,
 		Capability::Decorations,
+		Capability::Network,
 	]);
 	manifest.actions = [
 		Surface::Message,
@@ -64,6 +65,11 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		Surface::Activation,
 		Surface::MessageEvent,
 		Surface::AppEvent,
+		Surface::BeforeSend,
+		Surface::Command,
+		Surface::Decorate,
+		Surface::FetchResult,
+		Surface::Schedule,
 	]
 	.into_iter()
 	.enumerate()
@@ -73,6 +79,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 		surface,
 	})
 	.collect();
+	manifest.network_hosts = vec!["api.example.com".into()];
 	manifest.validate().unwrap();
 	let wire = serde_json::to_value(&manifest).unwrap();
 	let authored: sdk::Manifest = serde_json::from_value(wire.clone()).unwrap();
@@ -98,6 +105,7 @@ fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validatio
 	theme["kind"] = serde_json::json!("theme");
 	theme.as_object_mut().unwrap().remove("capabilities");
 	theme.as_object_mut().unwrap().remove("actions");
+	theme.as_object_mut().unwrap().remove("network_hosts");
 	let theme: sdk::Manifest = serde_json::from_value(theme).unwrap();
 	assert!(theme.capabilities.is_empty() && theme.actions.is_empty());
 	let imported: Manifest = serde_json::from_value(serde_json::to_value(theme).unwrap()).unwrap();
@@ -120,6 +128,7 @@ fn test_manifest(capabilities: Vec<Capability>) -> Manifest {
 			label: "Run".into(),
 			surface: Surface::Panel,
 		}],
+		network_hosts: Vec::new(),
 	}
 }
 
@@ -554,6 +563,234 @@ fn local_effects_require_matching_grants_and_cannot_run_in_background() {
 }
 
 #[test]
+fn before_send_needs_the_draft_and_may_only_rewrite_it() {
+	let mut manifest = test_manifest(vec![Capability::Composer, Capability::Storage]);
+	manifest.actions[0].surface = Surface::BeforeSend;
+	manifest.validate().unwrap();
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(matches!(input.validate(&manifest), Err(Error::Capability)));
+	input.composer = Some("s/teh/the/".into());
+	input.validate(&manifest).unwrap();
+	let rewrite = Output {
+		replacement: Some("the".into()),
+		storage: Some("1".into()),
+		..Default::default()
+	};
+	rewrite.validate(&manifest, &input).unwrap();
+	for forbidden in [
+		Output {
+			panel: vec![Element::Separator],
+			..Default::default()
+		},
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		},
+		Output {
+			appearance: Some(Theme::default()),
+			..Default::default()
+		},
+	] {
+		assert!(matches!(
+			forbidden.validate(&manifest, &input),
+			Err(Error::Capability)
+		));
+	}
+	manifest.capabilities.retain(|c| *c != Capability::Composer);
+	assert!(matches!(manifest.validate(), Err(Error::Capability)));
+}
+
+#[test]
+fn scheduled_runs_carry_elapsed_time_and_stay_passive() {
+	let mut manifest = test_manifest(vec![Capability::Storage, Capability::Appearance]);
+	manifest.actions[0].surface = Surface::Schedule;
+	manifest.validate().unwrap();
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(
+		input.validate(&manifest).is_err(),
+		"elapsed time is required"
+	);
+	input.tick_ms = Some(60_000);
+	input.validate(&manifest).unwrap();
+	Output {
+		storage: Some("1".into()),
+		appearance: Some(Theme::default()),
+		..Default::default()
+	}
+	.validate(&manifest, &input)
+	.unwrap();
+	for loud in [
+		Output {
+			panel: vec![Element::Separator],
+			..Default::default()
+		},
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		},
+	] {
+		assert!(loud.validate(&manifest, &input).is_err());
+	}
+	// Elapsed time never reaches other foreground actions.
+	manifest.actions[0].surface = Surface::Panel;
+	assert!(input.validate(&manifest).is_err());
+}
+
+#[test]
+fn network_reads_only_listed_hosts_and_results_go_to_their_own_action() {
+	let mut manifest = test_manifest(vec![Capability::Network, Capability::Storage]);
+	assert!(
+		matches!(manifest.validate(), Err(Error::Capability)),
+		"network needs listed hosts"
+	);
+	manifest.network_hosts = vec!["api.example.com".into(), "api.example.com".into()];
+	assert!(manifest.validate().is_err(), "hosts are distinct");
+	manifest.network_hosts = vec!["*.example.com".into()];
+	assert!(manifest.validate().is_err(), "no wildcards");
+	manifest.network_hosts = vec!["api.example.com".into()];
+	manifest.actions.push(Action {
+		id: "fetched".into(),
+		label: "Fetched".into(),
+		surface: Surface::FetchResult,
+	});
+	manifest.validate().unwrap();
+	let input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	let fetch = |url: &str| Output {
+		fetch: Some(FetchRequest {
+			id: "zones".into(),
+			url: url.into(),
+		}),
+		..Default::default()
+	};
+	fetch("https://api.example.com/zones?u=1")
+		.validate(&manifest, &input)
+		.unwrap();
+	for url in ["https://other.example.com/", "http://api.example.com/"] {
+		assert!(fetch(url).validate(&manifest, &input).is_err(), "{url}");
+	}
+	// The result is delivered only to `fetch_result`, and that action stays passive.
+	let mut result = Invocation {
+		action: "fetched".into(),
+		..Default::default()
+	};
+	assert!(result.validate(&manifest).is_err(), "result required");
+	result.fetch_result = Some(Box::new(FetchResult {
+		id: "zones".into(),
+		url: "https://api.example.com/zones".into(),
+		body: Some("{}".into()),
+		error: None,
+	}));
+	result.validate(&manifest).unwrap();
+	Output {
+		storage: Some("{}".into()),
+		..Default::default()
+	}
+	.validate(&manifest, &result)
+	.unwrap();
+	assert!(
+		Output {
+			effects: vec![HostEffect::Home],
+			..Default::default()
+		}
+		.validate(&manifest, &result)
+		.is_err()
+	);
+	let mut misplaced = input.clone();
+	misplaced.fetch_result = result.fetch_result.clone();
+	assert!(misplaced.validate(&manifest).is_err());
+	// Without the grant, a listed host is not enough.
+	let mut ungranted = test_manifest(vec![]);
+	ungranted.network_hosts = vec!["api.example.com".into()];
+	assert!(ungranted.validate().is_err());
+}
+
+#[test]
+fn decorate_batches_are_bounded_and_may_only_decorate_their_own_messages() {
+	let mut manifest = test_manifest(vec![Capability::Decorations]);
+	manifest.actions[0].surface = Surface::Decorate;
+	assert!(
+		matches!(manifest.validate(), Err(Error::Capability)),
+		"message text needs message_events"
+	);
+	manifest.capabilities.push(Capability::MessageEvents);
+	manifest.validate().unwrap();
+	let message = |id: &str| MessageEvent {
+		kind: MessageEventKind::Create,
+		channel_id: "20".into(),
+		message_id: id.into(),
+		author_id: Some("3".into()),
+		content: Some("hello".into()),
+	};
+	let mut input = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(input.validate(&manifest).is_err(), "a batch is required");
+	input.messages = Some(Box::new(
+		(1..=MAX_DECORATE_BATCH as u64 + 1)
+			.map(|id| message(&id.to_string()))
+			.collect(),
+	));
+	assert!(input.validate(&manifest).is_err(), "batch is bounded");
+	input.messages.as_mut().unwrap().truncate(2);
+	input.validate(&manifest).unwrap();
+	let decorate = |id: &str| MessageDecoration {
+		message_id: id.into(),
+		decoration: Decoration {
+			badges: vec![Badge {
+				text: "OK".into(),
+				..Default::default()
+			}],
+			..Default::default()
+		},
+	};
+	let wire = sdk::DecorationOutput {
+		decorations: vec![sdk::MessageDecoration {
+			message_id: "1".into(),
+			decoration: sdk::Decoration::default(),
+		}],
+		..Default::default()
+	};
+	let output: Output = serde_json::from_slice(&serde_json::to_vec(&wire).unwrap()).unwrap();
+	output.validate(&manifest, &input).unwrap();
+	let foreign = Output {
+		decorations: vec![decorate("1"), decorate("999")],
+		..Default::default()
+	};
+	assert!(
+		foreign.validate(&manifest, &input).is_err(),
+		"IDs come from the batch"
+	);
+	let panel = Output {
+		decorations: vec![decorate("2")],
+		panel: vec![Element::Separator],
+		..Default::default()
+	};
+	assert!(panel.validate(&manifest, &input).is_err());
+	// Other surfaces never receive batches or return per-message decorations.
+	manifest.actions[0].surface = Surface::MessageEvent;
+	assert!(input.validate(&manifest).is_err());
+	input.messages = None;
+	assert!(
+		Output {
+			decorations: vec![decorate("1")],
+			..Default::default()
+		}
+		.validate(&manifest, &input)
+		.is_err()
+	);
+}
+
+#[test]
 fn decorations_need_their_grant_and_a_message_event_and_round_trip_through_the_sdk() {
 	let decoration = sdk::Decoration {
 		badges: vec![sdk::Badge {
@@ -944,12 +1181,13 @@ fn discovery_is_forward_tolerant_and_does_not_change_legacy_input() {
 		label: "Events".into(),
 		surface: Surface::AppEvent,
 	});
+	supported.network_hosts = vec!["api.example.com".into()];
 	supported.validate().unwrap();
 	assert!(host.supports("rich_presence"));
 	assert!(host.supports("api_proxy"));
-	assert_eq!(caps.len(), 54);
+	assert_eq!(caps.len(), 55);
 	assert_eq!(HostInfo::current().app_events.len(), 21);
-	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 54);
+	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 55);
 }
 
 #[test]

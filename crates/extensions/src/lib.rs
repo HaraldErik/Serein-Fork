@@ -23,6 +23,8 @@ mod app;
 pub use app::*;
 mod decorations;
 pub use decorations::*;
+mod network;
+pub use network::*;
 mod extended;
 pub use extended::*;
 
@@ -147,6 +149,8 @@ pub enum Capability {
 	MessageDetails,
 	Relationships,
 	Decorations,
+	/// Pull-only HTTPS GET to the manifest's `network_hosts`.
+	Network,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,7 +164,23 @@ pub enum Surface {
 	AppEvent,
 	/// Host-scheduled appearance update. Each call is a fresh Wasm invocation.
 	Tick,
+	/// Runs when the user presses Send; may return a draft `replacement`.
+	BeforeSend,
+	/// Runs for `/<action id> arguments` typed in the composer; arguments arrive in `composer`.
+	Command,
+	/// Receives a batch of already-loaded messages in `messages` and returns `decorations`.
+	Decorate,
+	/// Receives the outcome of this plugin's `fetch` request in `fetch_result`.
+	FetchResult,
+	/// Runs about once a minute while the plugin is enabled; `tick_ms` is the time since enabling.
+	Schedule,
 }
+
+/// Most loaded messages one `decorate` call receives (and decorations it may return).
+pub const MAX_DECORATE_BATCH: usize = 32;
+
+/// Longest `/name` a plugin command may use.
+pub const MAX_COMMAND_NAME_BYTES: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,6 +205,9 @@ pub struct Manifest {
 	pub capabilities: Vec<Capability>,
 	#[serde(default)]
 	pub actions: Vec<Action>,
+	/// Hosts a `network` plugin may read; shown to the user when granting.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub network_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,6 +419,13 @@ pub struct Invocation {
 	/// Milliseconds elapsed since this plugin was enabled for the current session.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tick_ms: Option<u64>,
+	/// Outcome of this plugin's `fetch` request, for a `fetch_result` action.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fetch_result: Option<Box<FetchResult>>,
+	/// Already-loaded messages for a `decorate` action, newest first. Boxed like the other
+	/// optional groups so request queues stay small; the wire form is a plain array.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub messages: Option<Box<Vec<MessageEvent>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -535,6 +565,12 @@ pub struct Output {
 	/// Badges/text for the message that triggered a message-event handler.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub decoration: Option<Decoration>,
+	/// Per-message decorations from a `decorate` handler; each ID must be in its input batch.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub decorations: Vec<MessageDecoration>,
+	/// One pull-only HTTPS GET; the body arrives later at the plugin's `fetch_result` action.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fetch: Option<FetchRequest>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -653,6 +689,16 @@ impl Manifest {
 		if self.capabilities.iter().any(|c| !capabilities.insert(*c)) {
 			return Err(Error::Invalid);
 		}
+		let mut hosts = BTreeSet::new();
+		if self.network_hosts.len() > MAX_NETWORK_HOSTS
+			|| self
+				.network_hosts
+				.iter()
+				.any(|host| !valid_host(host) || !hosts.insert(host))
+			|| capabilities.contains(&Capability::Network) == self.network_hosts.is_empty()
+		{
+			return Err(Error::Capability);
+		}
 		if capabilities.contains(&Capability::DataEvents)
 			&& !capabilities.contains(&Capability::AppEvents)
 		{
@@ -709,7 +755,20 @@ impl Manifest {
 				Surface::MessageEvent => Some(Capability::MessageEvents),
 				Surface::AppEvent => Some(Capability::AppEvents),
 				Surface::Tick => Some(Capability::Appearance),
+				Surface::BeforeSend | Surface::Command => Some(Capability::Composer),
+				Surface::Decorate => Some(Capability::Decorations),
+				Surface::FetchResult => Some(Capability::Network),
+				Surface::Schedule => None,
 			};
+			// Batches carry message text, like live message events.
+			if action.surface == Surface::Decorate
+				&& !capabilities.contains(&Capability::MessageEvents)
+			{
+				return Err(Error::Capability);
+			}
+			if action.surface == Surface::Command && action.id.len() > MAX_COMMAND_NAME_BYTES {
+				return Err(Error::Invalid);
+			}
 			if required.is_some_and(|c| !capabilities.contains(&c)) {
 				return Err(Error::Capability);
 			}
@@ -957,12 +1016,30 @@ pub fn parse_catalog(bytes: &[u8]) -> Result<Catalog, Error> {
 }
 
 impl Invocation {
+	/// The `decorate` batch; empty for every other action.
+	pub fn messages(&self) -> &[MessageEvent] {
+		self.messages.as_deref().map_or(&[], Vec::as_slice)
+	}
 	pub fn validate(&self, manifest: &Manifest) -> Result<(), Error> {
 		let action = manifest
 			.actions
 			.iter()
 			.find(|a| a.id == self.action)
 			.ok_or(Error::Invalid)?;
+		if (action.surface == Surface::Decorate) == self.messages().is_empty()
+			|| self.messages().len() > MAX_DECORATE_BATCH
+		{
+			return Err(Error::Capability);
+		}
+		if (action.surface == Surface::FetchResult) != self.fetch_result.is_some() {
+			return Err(Error::Capability);
+		}
+		if let Some(result) = &self.fetch_result {
+			result.validate()?;
+		}
+		for message in self.messages() {
+			message.validate()?;
+		}
 		if let Some(snapshot) = &self.app {
 			snapshot.validate(manifest)?;
 		}
@@ -1038,9 +1115,13 @@ impl Invocation {
 			}
 		}
 		if self.selected_message.is_some() && action.surface != Surface::Message
-			|| self.composer.is_some() && action.surface != Surface::Composer
-			|| self.tick_ms.is_some() && action.surface != Surface::Tick
-			|| self.tick_ms.is_none() && action.surface == Surface::Tick
+			|| self.composer.is_some()
+				&& !matches!(
+					action.surface,
+					Surface::Composer | Surface::BeforeSend | Surface::Command
+				) || self.composer.is_none()
+			&& matches!(action.surface, Surface::BeforeSend | Surface::Command)
+			|| self.tick_ms.is_some() != matches!(action.surface, Surface::Tick | Surface::Schedule)
 		{
 			return Err(Error::Capability);
 		}
@@ -1083,6 +1164,68 @@ impl Output {
 				|| self.replacement.is_some()
 				|| !self.panel.is_empty()
 				|| self.storage.is_some()
+				|| !self.effects.is_empty())
+		{
+			return Err(Error::Capability);
+		}
+		if let Some(fetch) = &self.fetch {
+			if !manifest.capabilities.contains(&Capability::Network)
+				|| matches!(surface, Surface::Tick | Surface::BeforeSend)
+			{
+				return Err(Error::Capability);
+			}
+			fetch.validate(manifest)?;
+		}
+		if surface == Surface::Schedule
+			&& (self.replacement.is_some()
+				|| self.decoration.is_some()
+				|| !self.decorations.is_empty()
+				|| !self.panel.is_empty()
+				|| !self.effects.is_empty()
+				|| self.rich_presence.is_some()
+				|| self.api_proxy.is_some()
+				|| self.preserve_deleted_messages
+				|| self.image_sharing)
+		{
+			return Err(Error::Capability);
+		}
+		if surface == Surface::FetchResult
+			&& (self.replacement.is_some()
+				|| self.decoration.is_some()
+				|| !self.decorations.is_empty()
+				|| !self.effects.is_empty()
+				|| self.rich_presence.is_some()
+				|| self.api_proxy.is_some()
+				|| self.preserve_deleted_messages
+				|| self.image_sharing)
+		{
+			return Err(Error::Capability);
+		}
+		if surface == Surface::Decorate && (self.replacement.is_some() || self.decoration.is_some())
+			|| surface != Surface::Decorate && !self.decorations.is_empty()
+		{
+			return Err(Error::Capability);
+		}
+		if self.decorations.len() > MAX_DECORATE_BATCH {
+			return Err(Error::Limit);
+		}
+		for item in &self.decorations {
+			if !input
+				.messages()
+				.iter()
+				.any(|message| message.message_id == item.message_id)
+			{
+				return Err(Error::Invalid);
+			}
+			item.decoration.validate()?;
+		}
+		if matches!(surface, Surface::BeforeSend | Surface::Decorate)
+			&& (self.rich_presence.is_some()
+				|| self.image_sharing
+				|| self.preserve_deleted_messages
+				|| self.appearance.is_some()
+				|| self.api_proxy.is_some()
+				|| !self.panel.is_empty()
 				|| !self.effects.is_empty())
 		{
 			return Err(Error::Capability);

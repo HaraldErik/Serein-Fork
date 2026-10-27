@@ -30,6 +30,8 @@ mod member_details;
 pub use member_details::*;
 mod decorations;
 pub use decorations::*;
+mod network;
+pub use network::*;
 mod app;
 pub use app::*;
 mod extended;

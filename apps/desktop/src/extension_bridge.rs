@@ -8,6 +8,7 @@ use extensions::{
 };
 use std::{
 	collections::{BTreeMap, BTreeSet, VecDeque},
+	hash::{Hash, Hasher},
 	path::PathBuf,
 	sync::{Arc, mpsc},
 	time::{Duration, Instant},
@@ -26,9 +27,12 @@ struct Pending {
 }
 impl Pending {
 	fn reactive(&self) -> bool {
-		self.invocation
-			.as_ref()
-			.is_some_and(|(_, input, _)| input.message_event.is_some() || input.app_event.is_some())
+		self.invocation.as_ref().is_some_and(|(_, input, _)| {
+			input.message_event.is_some()
+				|| input.app_event.is_some()
+				|| input.messages.is_some()
+				|| input.tick_ms.is_some()
+		})
 	}
 }
 
@@ -110,6 +114,10 @@ fn parse_rgb_hex(text: &str) -> Option<[u8; 3]> {
 const MAX_MESSAGE_EVENTS: usize = 32;
 const MAX_MESSAGE_EVENT_BYTES: usize = 64 * 1024;
 const MESSAGE_EVENT_INTERVAL: Duration = Duration::from_millis(100);
+const FETCH_WINDOW: Duration = Duration::from_secs(60);
+const MAX_FETCHES_PER_WINDOW: usize = 10;
+const FETCH_STALE: Duration = Duration::from_secs(30);
+const SCHEDULE_INTERVAL: Duration = Duration::from_secs(60);
 
 fn attach_app_data(
 	invocation: &mut Invocation,
@@ -127,13 +135,28 @@ fn attach_app_data(
 
 enum ReactiveEvent {
 	Message(MessageEvent),
+	/// A completed `fetch`, for the plugin's `fetch_result` action.
+	Fetched(extensions::FetchResult),
+	/// A `schedule` run, with milliseconds since the plugin was enabled.
+	Scheduled(u64),
+	/// Already-loaded messages for a `decorate` action, newest first.
+	Decorate(Vec<MessageEvent>),
 	App(AppEventKind),
 	ActionResult(ActionResult),
 }
+fn event_bytes(event: &MessageEvent) -> usize {
+	event.channel_id.len()
+		+ event.message_id.len()
+		+ event.author_id.as_ref().map_or(0, String::len)
+		+ event.content.as_ref().map_or(0, String::len)
+}
+/// Message text in one `decorate` batch, keeping it well inside the event queue budget.
+const MAX_DECORATE_BATCH_BYTES: usize = 48 * 1024;
 impl ReactiveEvent {
 	fn available(&self, state: &State) -> bool {
 		match self {
-			Self::Message(_) => crate::extension_events::available(state),
+			Self::Message(_) | Self::Decorate(_) => crate::extension_events::available(state),
+			Self::Fetched(_) | Self::Scheduled(_) => state.user.is_some(),
 			Self::App(_) | Self::ActionResult(_) => crate::extension_app::available(state),
 		}
 	}
@@ -152,12 +175,12 @@ impl QueuedEvent {
 			+ match &self.event {
 				ReactiveEvent::App(_) => 0,
 				ReactiveEvent::ActionResult(result) => result.request_id.len(),
-				ReactiveEvent::Message(event) => {
-					event.channel_id.len()
-						+ event.message_id.len()
-						+ event.author_id.as_ref().map_or(0, String::len)
-						+ event.content.as_ref().map_or(0, String::len)
+				ReactiveEvent::Message(event) => event_bytes(event),
+				ReactiveEvent::Decorate(messages) => messages.iter().map(event_bytes).sum(),
+				ReactiveEvent::Fetched(result) => {
+					result.url.len() + result.body.as_ref().map_or(0, String::len)
 				}
+				ReactiveEvent::Scheduled(_) => 0,
 			}
 	}
 }
@@ -190,6 +213,15 @@ pub struct Bridge {
 	message_event_at: Option<Instant>,
 	message_events_dropped: bool,
 	app_key: Option<crate::extension_app::ChangeKey>,
+	/// Last loaded-message batch offered to `decorate` plugins.
+	decorate_key: Option<u64>,
+	/// Plugins with a `fetch` in flight, and each plugin's recent request times.
+	fetching: BTreeMap<String, Instant>,
+	fetch_log: BTreeMap<String, VecDeque<Instant>>,
+	/// Plugins whose in-flight `fetch` came from a foreground action, so its result may show a panel.
+	foreground_fetch: BTreeSet<String>,
+	/// `schedule` plugins: when each was enabled and when it runs next.
+	schedules: BTreeMap<String, (Instant, Instant)>,
 	extended_key: Option<u64>,
 	app_context_changed: bool,
 	data_changes: crate::extension_data_events::Changes,
@@ -461,6 +493,208 @@ impl Bridge {
 			self.message_events.push_back(queued);
 		}
 	}
+	/// Queues each enabled `schedule` action about once a minute, first right after enabling.
+	fn queue_schedules(&mut self, state: &State, now: Instant) {
+		let active: Vec<(String, String)> = self
+			.installed
+			.iter()
+			.filter(|entry| {
+				entry.error.is_none()
+					&& !self.disabled.contains(&entry.manifest.id)
+					&& self.scope_current(state)
+			})
+			.filter_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.find(|action| action.surface == Surface::Schedule)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		self.schedules
+			.retain(|id, _| active.iter().any(|(active, _)| active == id));
+		for (id, action) in active {
+			let (enabled, next) = *self.schedules.entry(id.clone()).or_insert((now, now));
+			let queued = self
+				.message_events
+				.iter()
+				.any(|event| event.id == id && matches!(event.event, ReactiveEvent::Scheduled(_)));
+			if now < next || queued || self.message_events.len() >= MAX_MESSAGE_EVENTS {
+				continue;
+			}
+			self.message_events.push_back(QueuedEvent {
+				id: id.clone(),
+				action,
+				context: ExtensionContext::capture(state, false),
+				event: ReactiveEvent::Scheduled(
+					u64::try_from(now.duration_since(enabled).as_millis()).unwrap_or(u64::MAX),
+				),
+			});
+			self.schedules
+				.insert(id, (enabled, now + SCHEDULE_INTERVAL));
+		}
+	}
+	/// Reserves a `fetch` slot: one in flight and ten per minute for each plugin.
+	fn admit_fetch(&mut self, id: &str, now: Instant) -> bool {
+		let log = self.fetch_log.entry(id.to_owned()).or_default();
+		while log
+			.front()
+			.is_some_and(|at| now.duration_since(*at) > FETCH_WINDOW)
+		{
+			log.pop_front();
+		}
+		// A failed job never reports back; its slot frees after the worker's timeout.
+		self.fetching
+			.retain(|_, started| now.duration_since(*started) < FETCH_STALE);
+		if self.fetching.contains_key(id) || log.len() >= MAX_FETCHES_PER_WINDOW {
+			return false;
+		}
+		log.push_back(now);
+		self.fetching.insert(id.to_owned(), now);
+		true
+	}
+	/// Starts one plugin `fetch`, at most one in flight and ten per minute per plugin.
+	#[allow(clippy::too_many_arguments)]
+	fn request_fetch(
+		&mut self,
+		id: &str,
+		request: extensions::FetchRequest,
+		foreground: bool,
+		account: &Option<String>,
+		state: &State,
+		ctx: &egui::Context,
+		messaging: &mut ui::MessagingUi,
+	) {
+		let Some(account) = account.clone() else {
+			return;
+		};
+		if !self.admit_fetch(id, Instant::now()) {
+			messaging.extensions.status =
+				format!("{id} is downloading too often; a request was skipped.");
+			return;
+		}
+		if foreground {
+			self.foreground_fetch.insert(id.to_owned());
+		} else {
+			self.foreground_fetch.remove(id);
+		}
+		self.submit(
+			Job::Fetch {
+				id: id.to_owned(),
+				account,
+				request,
+			},
+			None,
+			state.generation,
+			ctx,
+			messaging,
+		);
+	}
+	/// Offers the selected conversation's loaded messages to `decorate` plugins whenever that
+	/// set changes (conversation switch, history page, edit, plugin enabled).
+	fn queue_decorate_batches(&mut self, state: &State) {
+		let plugins: Vec<(String, String)> = self
+			.installed
+			.iter()
+			.filter(|entry| {
+				entry.error.is_none()
+					&& !self.disabled.contains(&entry.manifest.id)
+					&& entry
+						.manifest
+						.capabilities
+						.contains(&Capability::Decorations)
+					&& entry
+						.manifest
+						.capabilities
+						.contains(&Capability::MessageEvents)
+			})
+			.filter_map(|entry| {
+				entry
+					.manifest
+					.actions
+					.iter()
+					.find(|action| action.surface == Surface::Decorate)
+					.map(|action| (entry.manifest.id.clone(), action.id.clone()))
+			})
+			.collect();
+		let Some(channel) = state.selected.filter(|_| {
+			!plugins.is_empty()
+				&& crate::extension_events::available(state)
+				&& self.scope_current(state)
+		}) else {
+			self.decorate_key = None;
+			return;
+		};
+		let mut bytes = 0;
+		let messages: Vec<&model::Message> = state
+			.timeline
+			.iter()
+			.rev()
+			.filter(|message| {
+				message.channel == channel
+					&& !message.ephemeral
+					&& message.flags & 64 == 0
+					&& message.author.id.0 != 0
+					&& message.content.len() <= extensions::MAX_EVENT_CONTENT_BYTES
+			})
+			.take_while(|message| {
+				bytes += message.content.len();
+				bytes <= MAX_DECORATE_BATCH_BYTES
+			})
+			.take(extensions::MAX_DECORATE_BATCH)
+			.collect();
+		if messages.is_empty() {
+			return;
+		}
+		let mut key = std::hash::DefaultHasher::new();
+		(state.generation, channel, &plugins).hash(&mut key);
+		for message in &messages {
+			(message.id, message.revision).hash(&mut key);
+		}
+		let key = key.finish();
+		if self.decorate_key == Some(key) {
+			return;
+		}
+		let batch: Vec<MessageEvent> = messages
+			.iter()
+			.map(|message| MessageEvent {
+				kind: extensions::MessageEventKind::Create,
+				channel_id: channel.0.to_string(),
+				message_id: message.id.0.to_string(),
+				author_id: Some(message.author.id.0.to_string()),
+				content: Some(message.content.clone()),
+			})
+			.collect();
+		let queued: Vec<QueuedEvent> = plugins
+			.into_iter()
+			.map(|(id, action)| QueuedEvent {
+				id,
+				action,
+				context: ExtensionContext::capture(state, false),
+				event: ReactiveEvent::Decorate(batch.clone()),
+			})
+			.collect();
+		let bytes: usize = self
+			.message_events
+			.iter()
+			.map(QueuedEvent::bytes)
+			.sum::<usize>()
+			+ queued.iter().map(QueuedEvent::bytes).sum::<usize>();
+		if self.message_events.len() + queued.len() > MAX_MESSAGE_EVENTS
+			|| bytes > MAX_MESSAGE_EVENT_BYTES
+		{
+			// Try again on a later frame, once the queue drains.
+			return;
+		}
+		// A newer batch for the same plugin replaces one that has not run yet.
+		self.message_events.retain(|event| {
+			!matches!(event.event, ReactiveEvent::Decorate(_))
+				|| !queued.iter().any(|next| next.id == event.id)
+		});
+		self.message_events.extend(queued);
+		self.decorate_key = Some(key);
+	}
 	pub fn cancel_stale_message_events(&mut self, state: &State) {
 		let available = self.scope_current(state);
 		self.message_events.retain(|event| {
@@ -474,7 +708,7 @@ impl Bridge {
 					.is_some_and(|(_, input, context)| {
 						!available
 							|| !context.is_current(state)
-							|| input.message_event.is_some()
+							|| (input.message_event.is_some() || input.messages.is_some())
 								&& !crate::extension_events::available(state)
 							|| input.app_event.is_some() && !crate::extension_app::available(state)
 					})
@@ -488,6 +722,8 @@ impl Bridge {
 	}
 	pub fn logout(&mut self, ctx: &egui::Context) -> Result<(), String> {
 		self.message_events.clear();
+		self.fetching.clear();
+		self.foreground_fetch.clear();
 		self.app_key = None;
 		self.app_context_changed = false;
 		self.data_changes = Default::default();
@@ -562,6 +798,10 @@ impl Bridge {
 		let scope = (state.generation, account.clone());
 		if self.scope.as_ref() != Some(&scope) {
 			self.message_events.clear();
+			self.fetching.clear();
+			self.fetch_log.clear();
+			self.foreground_fetch.clear();
+			self.schedules.clear();
 			self.app_key = None;
 			self.app_context_changed = false;
 			self.data_changes = Default::default();
@@ -923,7 +1163,75 @@ impl Bridge {
 								decoration.clone(),
 							);
 						}
-						if invocation.message_event.is_none() && invocation.app_event.is_none() {
+						let surface = self
+							.installed
+							.iter()
+							.find(|entry| entry.manifest.id == id)
+							.and_then(|entry| {
+								entry
+									.manifest
+									.actions
+									.iter()
+									.find(|action| action.id == invocation.action)
+							})
+							.map(|action| action.surface);
+						let mut output = output;
+						if surface == Some(Surface::Command)
+							&& let Some(replacement) = output.replacement.take()
+						{
+							messaging
+								.extensions
+								.apply_command_output(state, &context, replacement);
+						}
+						// A result answers a foreground request only once; a chained fetch keeps that.
+						let was_foreground = surface == Some(Surface::FetchResult)
+							&& self.foreground_fetch.remove(&id);
+						if let Some(request) = output.fetch.take() {
+							let foreground = was_foreground
+								|| matches!(
+									surface,
+									Some(
+										Surface::Panel
+											| Surface::Message | Surface::Composer
+											| Surface::Command
+									)
+								);
+							self.request_fetch(
+								&id, request, foreground, &account, state, ctx, messaging,
+							);
+						}
+						if surface == Some(Surface::Schedule) {
+							// Passive: storage, appearance and fetch were handled above or by the worker.
+						} else if surface == Some(Surface::FetchResult) {
+							if was_foreground && !output.panel.is_empty() {
+								messaging
+									.extensions
+									.present_output(id, invocation, context, output, state);
+							}
+						} else if surface == Some(Surface::Decorate) {
+							for item in &output.decorations {
+								messaging.extensions.decorate_message(
+									&id,
+									&item.message_id,
+									item.decoration.clone(),
+								);
+							}
+						} else if surface == Some(Surface::Command)
+							&& output.panel.is_empty()
+							&& output.effects.is_empty()
+						{
+							// Nothing left to show; the draft already carries the result.
+						} else if surface == Some(Surface::BeforeSend) {
+							messaging.extensions.send_hook_output(
+								ctx,
+								&id,
+								&context,
+								output.replacement.clone(),
+								state,
+							);
+						} else if invocation.message_event.is_none()
+							&& invocation.app_event.is_none()
+						{
 							messaging
 								.extensions
 								.present_output(id, invocation, context, output, state);
@@ -944,6 +1252,50 @@ impl Bridge {
 					preview,
 				),
 				Ok(Event::ThemeExported) => messaging.extensions.status = "Theme exported.".into(),
+				Ok(Event::Fetched { id, result }) => {
+					self.fetching.remove(&id);
+					let action = self
+						.installed
+						.iter()
+						.filter(|entry| !self.disabled.contains(&entry.manifest.id))
+						.find(|entry| entry.manifest.id == id)
+						.and_then(|entry| {
+							entry
+								.manifest
+								.actions
+								.iter()
+								.find(|action| action.surface == Surface::FetchResult)
+						})
+						.map(|action| action.id.clone());
+					let queued = action.map(|action| QueuedEvent {
+						id: id.clone(),
+						action,
+						context: ExtensionContext::capture(state, false),
+						event: ReactiveEvent::Fetched(result),
+					});
+					match queued {
+						Some(queued)
+							if self.message_events.len() < MAX_MESSAGE_EVENTS
+								&& self
+									.message_events
+									.iter()
+									.map(QueuedEvent::bytes)
+									.sum::<usize>() + queued.bytes()
+									<= MAX_MESSAGE_EVENT_BYTES =>
+						{
+							self.message_events.push_back(queued)
+						}
+						Some(_) => {
+							self.foreground_fetch.remove(&id);
+							messaging.extensions.status =
+								"A plugin download finished while the event queue was full; it was dropped."
+									.into();
+						}
+						None => {
+							self.foreground_fetch.remove(&id);
+						}
+					}
+				}
 				Ok(Event::LoggedOut | Event::Preview { .. }) => {}
 			}
 		}
@@ -1329,6 +1681,8 @@ impl Bridge {
 			self.pending.retain(|_, pending| pending.cleanup);
 		}
 		self.app_events(state, messaging);
+		self.queue_decorate_batches(state);
+		self.queue_schedules(state, Instant::now());
 		let available = self.scope_current(state);
 		let installed = &self.installed;
 		let disabled = &self.disabled;
@@ -1361,6 +1715,13 @@ impl Bridge {
 						ReactiveEvent::Message(event) => {
 							invocation.message_event = Some(Box::new(event))
 						}
+						ReactiveEvent::Decorate(messages) => {
+							invocation.messages = Some(Box::new(messages))
+						}
+						ReactiveEvent::Fetched(result) => {
+							invocation.fetch_result = Some(Box::new(result))
+						}
+						ReactiveEvent::Scheduled(elapsed) => invocation.tick_ms = Some(elapsed),
 						ReactiveEvent::App(kind) => {
 							invocation.app_event = Some(kind);
 							let manifest = &self
@@ -1410,6 +1771,23 @@ impl Bridge {
 			}
 		}
 		self.schedule_ticks(&account, state.generation, ctx, messaging);
+		// A failed, cancelled or discarded send plugin must not leave the composer waiting.
+		if let Some(waiting) = messaging.extensions.send_hook_waiting().map(str::to_owned)
+			&& !self.pending.values().any(|pending| {
+				pending
+					.invocation
+					.as_ref()
+					.is_some_and(|(id, input, _)| *id == waiting && input.composer.is_some())
+			}) && !messaging
+			.extensions
+			.requests
+			.iter()
+			.any(|request| matches!(request, ExtensionRequest::Invoke { id, .. } if *id == waiting))
+		{
+			messaging.extensions.abort_send_hooks(
+				"A send plugin did not finish; your draft was kept. Press Send to try again.",
+			);
+		}
 	}
 	fn schedule_ticks(
 		&mut self,
@@ -1851,6 +2229,122 @@ mod tests {
 		};
 		assert!(bridge.has_message_events(&state));
 		(bridge, state, event)
+	}
+
+	#[test]
+	fn decorate_plugins_get_one_bounded_batch_per_change_of_loaded_messages() {
+		let (mut bridge, mut state, _) = message_events_fixture();
+		let manifest = &mut bridge.installed[0].manifest;
+		manifest.capabilities = vec![Capability::MessageEvents, Capability::Decorations];
+		manifest.actions = vec![extensions::Action {
+			id: "decorate".into(),
+			label: "Decorate".into(),
+			surface: Surface::Decorate,
+		}];
+		let channel = state.selected.unwrap();
+		for id in 0..40 {
+			let mut message = test_support::message(5000 + id, channel);
+			message.content = "x".repeat(1024);
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		let batch = |bridge: &Bridge| -> Vec<Vec<String>> {
+			bridge
+				.message_events
+				.iter()
+				.filter_map(|event| match &event.event {
+					ReactiveEvent::Decorate(messages) => {
+						Some(messages.iter().map(|m| m.message_id.clone()).collect())
+					}
+					_ => None,
+				})
+				.collect()
+		};
+		bridge.queue_decorate_batches(&state);
+		let first = batch(&bridge);
+		assert_eq!(first.len(), 1);
+		assert!(first[0].len() <= extensions::MAX_DECORATE_BATCH);
+		assert_eq!(first[0][0], "5039", "newest message first");
+		let total: usize = bridge.message_events.iter().map(QueuedEvent::bytes).sum();
+		assert!(total <= MAX_MESSAGE_EVENT_BYTES);
+		// Nothing changed: no second batch.
+		bridge.queue_decorate_batches(&state);
+		assert_eq!(batch(&bridge).len(), 1);
+		// A newly loaded message replaces the waiting batch instead of queueing another.
+		state
+			.timeline
+			.insert(test_support::message(6000, channel), false, false)
+			.unwrap();
+		bridge.queue_decorate_batches(&state);
+		let next = batch(&bridge);
+		assert_eq!(next.len(), 1);
+		assert_eq!(next[0][0], "6000");
+		// Without the grant, nothing is offered.
+		bridge.message_events.clear();
+		bridge.installed[0].manifest.capabilities = vec![Capability::Decorations];
+		state
+			.timeline
+			.insert(test_support::message(6001, channel), false, false)
+			.unwrap();
+		bridge.queue_decorate_batches(&state);
+		assert!(batch(&bridge).is_empty());
+	}
+
+	#[test]
+	fn scheduled_plugins_run_once_a_minute_without_piling_up() {
+		let (mut bridge, state, _) = message_events_fixture();
+		bridge.installed[0].manifest.actions = vec![extensions::Action {
+			id: "every-minute".into(),
+			label: "Refresh".into(),
+			surface: Surface::Schedule,
+		}];
+		let runs = |bridge: &Bridge| -> Vec<u64> {
+			bridge
+				.message_events
+				.iter()
+				.filter_map(|event| match event.event {
+					ReactiveEvent::Scheduled(ms) => Some(ms),
+					_ => None,
+				})
+				.collect()
+		};
+		let start = Instant::now();
+		bridge.queue_schedules(&state, start);
+		assert_eq!(runs(&bridge), [0], "first run right after enabling");
+		bridge.queue_schedules(&state, start + Duration::from_secs(10));
+		assert_eq!(runs(&bridge), [0]);
+		// A run that has not been delivered yet is never duplicated.
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL);
+		assert_eq!(runs(&bridge), [0]);
+		bridge.message_events.clear();
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL);
+		assert_eq!(runs(&bridge), [SCHEDULE_INTERVAL.as_millis() as u64]);
+		// Disabling stops the schedule.
+		bridge.message_events.clear();
+		bridge
+			.disabled
+			.insert(bridge.installed[0].manifest.id.clone());
+		bridge.queue_schedules(&state, start + SCHEDULE_INTERVAL * 3);
+		assert!(runs(&bridge).is_empty() && bridge.schedules.is_empty());
+	}
+
+	#[test]
+	fn plugin_downloads_are_one_at_a_time_and_rate_limited() {
+		let mut bridge = Bridge::default();
+		let start = Instant::now();
+		assert!(bridge.admit_fetch("a", start));
+		assert!(!bridge.admit_fetch("a", start), "one in flight per plugin");
+		assert!(bridge.admit_fetch("b", start), "plugins are independent");
+		// A job that never reported back stops blocking once it is stale.
+		assert!(!bridge.admit_fetch("b", start + Duration::from_secs(1)));
+		assert!(bridge.admit_fetch("b", start + FETCH_STALE + Duration::from_secs(1)));
+		// Completed requests free the slot but still count toward the window.
+		for second in 1..MAX_FETCHES_PER_WINDOW as u64 {
+			bridge.fetching.remove("a");
+			assert!(bridge.admit_fetch("a", start + Duration::from_secs(second)));
+		}
+		bridge.fetching.remove("a");
+		assert!(!bridge.admit_fetch("a", start + Duration::from_secs(20)));
+		assert!(bridge.admit_fetch("a", start + FETCH_WINDOW + Duration::from_secs(2)));
 	}
 
 	#[test]

@@ -1,0 +1,16 @@
+{
+  "api_version": 1,
+  "id": "fun-commands",
+  "name": "Fun Commands",
+  "version": "1.0.0",
+  "author": "Serein contributors",
+  "license": "MIT OR Apache-2.0",
+  "source": "https://github.com/HaraldErik/Serein-Fork/tree/main/examples/extensions/fun-commands",
+  "kind": "plugin",
+  "capabilities": ["composer"],
+  "actions": [
+    {"id": "mock", "label": "/mock text: aLtErNaTiNg CaPs", "surface": "command"},
+    {"id": "reverse", "label": "/reverse text: txet desrever", "surface": "command"},
+    {"id": "upper", "label": "/upper text: UPPERCASE", "surface": "command"}
+  ]
+}

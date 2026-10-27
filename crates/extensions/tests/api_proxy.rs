@@ -18,6 +18,7 @@ fn manifest() -> Manifest {
 			label: "Apply".into(),
 			surface: Surface::Panel,
 		}],
+		network_hosts: Vec::new(),
 	}
 }
 #[test]

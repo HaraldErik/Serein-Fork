@@ -2,13 +2,14 @@
   "api_version": 1,
   "id": "link-badges",
   "name": "Link Badges",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Serein contributors",
   "license": "MIT OR Apache-2.0",
   "source": "https://github.com/HaraldErik/Serein-Fork/tree/main/examples/extensions/link-badges",
   "kind": "plugin",
   "capabilities": ["message_events", "decorations"],
   "actions": [
-    {"id": "message-event", "label": "Badge messages", "surface": "message_event"}
+    {"id": "message-event", "label": "Badge new messages", "surface": "message_event"},
+    {"id": "decorate", "label": "Badge loaded messages", "surface": "decorate"}
   ]
 }

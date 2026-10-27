@@ -145,6 +145,7 @@ impl ThemeEditor {
 					kind: ExtensionKind::Theme,
 					capabilities: vec![],
 					actions: vec![],
+					network_hosts: Vec::new(),
 				},
 				theme: Some(Theme::default()),
 				wasm: vec![],
