@@ -11,6 +11,11 @@ decorations API. Deep references: [SDK overview](extension-sdk-overview.md),
 [all capabilities](extensions.md#capability-reference), and the
 [v2 roadmap](plugin-api-v2.md).
 
+> **Fork rule:** every new feature in Serein-Fork is an extension, toggled and configured under
+> Settings → Extensions. Write a plugin when this API can do the job; only when it cannot (audio,
+> composer buttons, per-frame UI) add a *built-in extension* instead. See
+> [README](../README.md#how-features-are-added-everything-is-an-extension) and `AGENTS.md`.
+
 ## How a plugin runs
 
 1. **Declare.** A manifest names the plugin, its actions and the permissions (capabilities) it needs.

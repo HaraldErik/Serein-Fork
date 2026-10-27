@@ -33,7 +33,7 @@ deafen, push-to-talk, permission and encrypted-readiness gates continue taking p
 Opening settings or changing a level never starts a call or opens a microphone.
 
 Right-click another participant's voice-row name, avatar, or stage card for
-**User volume**, from 0% to 400% (Volume Booster; above 100% a soft limiter bends peaks instead of hard clipping), and **Reset volume** (100%). Keyboard users can focus
+**User volume**, from 0% to 200%, or up to 400% with the Volume Booster built-in extension (Settings → Extensions → Built-in; a soft limiter bends peaks instead of hard clipping), and **Reset volume** (100%). Keyboard users can focus
 an avatar/name and press Shift+F10. This changes only that person's voice playback before
 mixing; the global speaker level and deafen still apply. Speaking indicators remain based on
 the received signal. Screen-share audio has its own mix and is unaffected. Overrides are saved

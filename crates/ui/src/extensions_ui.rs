@@ -1501,7 +1501,13 @@ impl ExtensionUi {
 			}
 		}
 	}
-	pub(crate) fn settings(&mut self, ui: &mut egui::Ui, state: &State) {
+	/// `builtin` draws the fork's Built-in extensions under the toolbar (plugins page only).
+	pub(crate) fn settings(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		builtin: impl FnOnce(&mut egui::Ui),
+	) {
 		self.theme_editor_visible = self.themes;
 		if self.themes && self.theme_editor.is_some() {
 			self.edit_theme(ui);
@@ -1512,6 +1518,16 @@ impl ExtensionUi {
 		let colors = design::palette(ui);
 		self.toolbar(ui, &colors);
 		ui.add_space(14.0);
+		if !self.themes {
+			builtin(ui);
+			ui.add_space(10.0);
+			ui.label(design::eyebrow(
+				ui,
+				crate::i18n::translate("builtin-extensions-community"),
+				colors.muted,
+			));
+			ui.add_space(6.0);
+		}
 		let mut enable = None;
 		let mut disable = None;
 		let mut invoke = None;
@@ -3518,7 +3534,7 @@ mod tests {
 				if extensions.previewing_theme() {
 					extensions.theme_preview_bar(ui, 0.0);
 				} else {
-					extensions.settings(ui, &State::default());
+					extensions.settings(ui, &State::default(), |_| {});
 				}
 			},
 		);
@@ -3718,7 +3734,7 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| shop.settings(ui, &State::default()),
+					|ui| shop.settings(ui, &State::default(), |_| {}),
 				)
 				.drop_without_applying_deltas();
 				for request in std::mem::take(&mut shop.requests) {
@@ -3740,7 +3756,7 @@ mod tests {
 					)),
 					..Default::default()
 				},
-				|ui| shop.settings(ui, &State::default()),
+				|ui| shop.settings(ui, &State::default(), |_| {}),
 			)
 			.drop_without_applying_deltas();
 			assert!(shop.requests.is_empty());

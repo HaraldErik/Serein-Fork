@@ -91,7 +91,7 @@ fn code_spans(text: &str) -> Vec<(usize, usize, usize)> {
 }
 
 /// Removes tracking parameters from every `http(s)` link outside code.
-pub(crate) fn clear_urls(text: &str) -> String {
+pub(crate) fn clear_urls(text: &str, site_rules: bool) -> String {
 	rewrite_outside_code(text, |segment, out| {
 		let mut rest = segment;
 		while let Some(at) = find_url_start(rest) {
@@ -101,7 +101,7 @@ pub(crate) fn clear_urls(text: &str) -> String {
 				.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '|'))
 				.unwrap_or(tail.len());
 			let (url, trailing) = split_trailing_punctuation(&tail[..length]);
-			out.push_str(&clean_url(url));
+			out.push_str(&clean_url(url, site_rules));
 			out.push_str(trailing);
 			rest = &tail[length..];
 		}
@@ -135,7 +135,7 @@ fn split_trailing_punctuation(url: &str) -> (&str, &str) {
 	(&url[..end], &url[end..])
 }
 
-fn clean_url(url: &str) -> String {
+fn clean_url(url: &str, site_rules: bool) -> String {
 	let Some(query_at) = url.find('?') else {
 		return url.to_owned();
 	};
@@ -159,7 +159,7 @@ fn clean_url(url: &str) -> String {
 			let key = key.to_ascii_lowercase();
 			!(key.starts_with("utm_")
 				|| TRACKING.contains(&key.as_str())
-				|| host_tracking(&host, &key, value))
+				|| (site_rules && host_tracking(&host, &key, value)))
 		})
 		.collect();
 	if kept.len() == query.split('&').filter(|pair| !pair.is_empty()).count() {
@@ -189,7 +189,7 @@ fn rewrite_outside_code(text: &str, mut edit: impl FnMut(&str, &mut String)) -> 
 
 /// Turns single-backtick code spans that hold only a clock time (`` `18:30` ``, `` `6:30 pm` ``)
 /// into `<t:…:t>` for today in the sender's zone, so every reader sees their own local time.
-pub(crate) fn send_timestamps(text: &str, today: time::OffsetDateTime) -> String {
+pub(crate) fn send_timestamps(text: &str, today: time::OffsetDateTime, style: char) -> String {
 	let mut out = String::with_capacity(text.len());
 	let mut offset = 0;
 	for (start, end, width) in code_spans(text) {
@@ -201,7 +201,7 @@ pub(crate) fn send_timestamps(text: &str, today: time::OffsetDateTime) -> String
 		};
 		let at = today.replace_time(clock).unix_timestamp();
 		out.push_str(&text[offset..start]);
-		out.push_str(&format!("<t:{at}:t>"));
+		out.push_str(&format!("<t:{at}:{style}>"));
 		offset = end;
 	}
 	out.push_str(&text[offset..]);
@@ -294,8 +294,13 @@ mod tests {
 			),
 			("no links here ?utm_source=x", "no links here ?utm_source=x"),
 		] {
-			assert_eq!(clear_urls(input), expected, "{input}");
+			assert_eq!(clear_urls(input, true), expected, "{input}");
 		}
+		// Without site rules only the generic trackers go.
+		assert_eq!(
+			clear_urls("https://youtu.be/x?si=a&utm_source=b", false),
+			"https://youtu.be/x?si=a"
+		);
 	}
 
 	#[test]
@@ -310,7 +315,7 @@ mod tests {
 				.unix_timestamp()
 		};
 		assert_eq!(
-			send_timestamps("meet `18:30` or `6:30 pm`, not `25:00`/`9:5`", today),
+			send_timestamps("meet `18:30` or `6:30 pm`, not `25:00`/`9:5`", today, 't'),
 			format!(
 				"meet <t:{}:t> or <t:{}:t>, not `25:00`/`9:5`",
 				at(18, 30),
@@ -318,8 +323,8 @@ mod tests {
 			)
 		);
 		assert_eq!(
-			send_timestamps("`12:00am` `12:15PM` ``18:30``", today),
-			format!("<t:{}:t> <t:{}:t> ``18:30``", at(0, 0), at(12, 15))
+			send_timestamps("`12:00am` `12:15PM` ``18:30``", today, 'R'),
+			format!("<t:{}:R> <t:{}:R> ``18:30``", at(0, 0), at(12, 15))
 		);
 		// A unix timestamp is independent of zone: 18:30 at +02:00 is 16:30 UTC.
 		assert_eq!(at(18, 30) % 86_400, (16 * 3600 + 30 * 60) as i64);

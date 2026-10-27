@@ -48,12 +48,8 @@ pub struct AppPreferences {
 	pub hide_nitro_emojis: bool,
 	/// Device-local opt-in; older saved preferences deserialize with conversion off.
 	pub convert_emoticons: bool,
-	/// Strip tracking parameters from links when sending (Equicord ClearURLs).
-	pub clear_urls: bool,
-	/// Turn `` `18:30` `` into a Discord timestamp when sending (Equicord SendTimestamps).
-	pub send_timestamps: bool,
-	/// Show the composer bell that sends the next message silently.
-	pub silent_message_toggle: bool,
+	/// On/off and Config of built-in extensions (Settings → Extensions → Built-in).
+	pub builtin_extensions: model::BuiltinExtensions,
 	/// Request a conversation's page while the pointer rests on it; older preferences enable it.
 	pub preload_on_hover: bool,
 	/// Hide the in-app title strip. macOS and Windows then show the system title bar.
@@ -108,9 +104,7 @@ impl Default for AppPreferences {
 			show_hidden_channels: false,
 			hide_nitro_emojis: false,
 			convert_emoticons: false,
-			clear_urls: true,
-			send_timestamps: true,
-			silent_message_toggle: true,
+			builtin_extensions: Default::default(),
 			preload_on_hover: true,
 			hide_title_bar: false,
 			message_requests_collapsed: false,
@@ -159,6 +153,7 @@ impl AppPreferences {
 			&& self.expanded_folders.len() <= 256
 			&& self.user_volumes.len() <= 64
 			&& self.user_volumes.iter().all(|(_, volume)| *volume <= 400)
+			&& self.builtin_extensions.is_valid()
 			&& self.muted_users.len() <= 64
 			&& self.keybinds.is_valid()
 			&& self.image_cache.is_valid()
@@ -2124,6 +2119,25 @@ mod tests {
 			Err(StoreError::Incompatible)
 		));
 	}
+	#[test]
+	fn builtin_extensions_fill_defaults_and_reject_out_of_range_config() {
+		let partial: AppPreferences = serde_json::from_str(
+			r#"{"builtin_extensions":{"volume_booster":{"enabled":false}},"clear_urls":false}"#,
+		)
+		.unwrap();
+		let builtin = partial.builtin_extensions;
+		assert!(!builtin.volume_booster.enabled);
+		assert_eq!(builtin.volume_booster.max_percent, 400);
+		assert_eq!(builtin.volume_booster.ceiling(), 200);
+		assert!(builtin.clear_urls.enabled && partial.is_valid());
+		let mut invalid = AppPreferences::default();
+		invalid.builtin_extensions.volume_booster.max_percent = 401;
+		assert!(!invalid.is_valid());
+		invalid.builtin_extensions.volume_booster.max_percent = 300;
+		invalid.builtin_extensions.send_timestamps.style = 'x';
+		assert!(!invalid.is_valid());
+	}
+
 	#[test]
 	fn emoticon_conversion_defaults_off_and_persists_across_reopens() {
 		let legacy: AppPreferences = serde_json::from_str("{}").unwrap();
