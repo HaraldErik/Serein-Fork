@@ -159,9 +159,9 @@ cd ../.. && cargo run --locked --features demo -- --demo      # then import the 
 ```
 
 Read the **[Plugin guide](docs/plugin-guide.md)** for the manifest, actions, permissions, limits, testing
-and the preview APIs (decorations, send hooks, slash commands, pull-only downloads), and browse the
-[example plugins](examples/extensions). The [roadmap](docs/plugin-api-v2.md) lists what is planned
-next (UI buttons and menus, timers, limited auto-apply) and what will never be supported.
+and the preview APIs (decorations, send hooks, slash commands, pull-only downloads, timers), and browse
+the [example plugins](examples/extensions). The [roadmap](docs/plugin-api-v2.md) lists what is planned
+next (more UI buttons and menus, limited auto-apply) and what will never be supported.
 
 ## Troubleshooting
 

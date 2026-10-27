@@ -15,6 +15,7 @@ fn manifest(action: &str, surface: Surface) -> Manifest {
 		Surface::Tick => capabilities.push(Capability::Appearance),
 		Surface::BeforeSend | Surface::Command => capabilities.push(Capability::Composer),
 		Surface::FetchResult => capabilities.push(Capability::Network),
+		Surface::Schedule => {}
 		Surface::Decorate => {
 			capabilities.extend([Capability::Decorations, Capability::MessageEvents])
 		}

@@ -50,7 +50,11 @@ v1 plugins only answer a user action or app event with one JSON result. They can
   10/minute per plugin; the result goes to `fetch_result`, which may save storage, and shows a panel
   only for foreground-started requests. See `docs/threat-model.md`. Example: `github-zen`. The
   extension catalog still accepts only its narrower reviewed capability set.
-- Not yet: compact layout, user/server decorations, a real visual blur, timers, auto-apply.
+- `schedule` surface: queued through the reactive event queue about every 60 s per plugin (first run
+  on enable), with `tick_ms` = time since enabling; output limited to `storage`, `appearance` and
+  `fetch`. A pending run is never duplicated.
+- Not yet: compact layout, user/server decorations, a real visual blur, UI buttons/menus beyond the
+  existing message and composer menus, auto-apply.
 
 ## New plugin surfaces
 
