@@ -674,7 +674,8 @@ pub fn debug_voice_preferences_check() {
 		crate::app_settings::Settings::from_preferences(Ok(local_store::AppPreferences::default()));
 	let mut view = ui::MessagingUi::default();
 	settings.apply(&mut view);
-	view.set_voice_user_volume_overrides(&[(7, 35), (9, 150)]);
+	// 400% is the Volume Booster ceiling and must survive a restart.
+	view.set_voice_user_volume_overrides(&[(7, 35), (9, 400)]);
 	view.set_voice_user_mutes(&[9]);
 	settings.observe(&view);
 	{
@@ -698,13 +699,13 @@ pub fn debug_voice_preferences_check() {
 	assert!(restarted.voice_user_volumes().contains(&(9, 0)));
 	assert_eq!(
 		restarted.voice_user_volume_overrides(),
-		vec![(7, 35), (9, 150)]
+		vec![(7, 35), (9, 400)]
 	);
 	restored.observe(&restarted);
 	assert!(!restored.state.touched && !restored.state.dirty);
 	restarted.notifications_enabled = !restarted.notifications_enabled;
 	restored.observe(&restarted);
-	assert_eq!(restored.current.user_volumes, vec![(7, 35), (9, 150)]);
+	assert_eq!(restored.current.user_volumes, vec![(7, 35), (9, 400)]);
 	assert_eq!(restored.current.muted_users, vec![9]);
 	let mut failed =
 		crate::app_settings::Settings::from_preferences(Err(local_store::StoreError::Unavailable));
@@ -723,7 +724,7 @@ pub fn debug_voice_preferences_check() {
 			.app_preferences()
 			.unwrap()
 			.user_volumes,
-		vec![(7, 35), (9, 150)]
+		vec![(7, 35), (9, 400)]
 	);
 	std::fs::remove_file(path).unwrap();
 	std::fs::remove_dir(root).unwrap();

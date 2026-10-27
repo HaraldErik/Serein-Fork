@@ -127,7 +127,9 @@ impl MessagingUi {
 		if self.voice_stream_muted {
 			0
 		} else {
-			self.voice_stream_volume.unwrap_or(100).min(200)
+			self.voice_stream_volume
+				.unwrap_or(100)
+				.min(PLAYBACK_MAX_PERCENT)
 		}
 	}
 
@@ -295,9 +297,12 @@ impl MessagingUi {
 						.as_deref()
 						.and_then(|values| values.iter().find(|(user, _)| *user == id))
 						.map_or(100, |(_, volume)| *volume);
-					let changed =
-						gain_slider(ui, &mut volume, "voice-voice-participant-menu-user-volume")
-							.changed();
+					let changed = playback_slider(
+						ui,
+						&mut volume,
+						"voice-voice-participant-menu-user-volume",
+					)
+					.changed();
 					let reset = ui
 						.add_enabled(
 							volume != 100,
@@ -1562,7 +1567,7 @@ impl MessagingUi {
 			&mut self.voice_stream_muted,
 			crate::i18n::translate("voice-stream-audio-controls-mute-stream-audio"),
 		);
-		gain_slider(
+		playback_slider(
 			ui,
 			self.voice_stream_volume.get_or_insert(100),
 			"voice-stream-audio-controls-stream-volume",
@@ -4706,13 +4711,26 @@ pub(super) fn participant_user(state: &State, channel: Id, user: Id) -> Option<&
 }
 
 /// Labelled percentage slider shared by the voice popout and the settings page.
+/// Participant and stream playback ceiling (Volume Booster); must match
+/// `discord_voice::MAX_PLAYBACK_PERCENT`, which the mixer enforces.
+pub(crate) const PLAYBACK_MAX_PERCENT: u16 = 400;
+
 fn gain_slider(ui: &mut egui::Ui, value: &mut u16, title: &str) -> egui::Response {
+	ranged_gain_slider(ui, value, title, 200)
+}
+
+/// Like [`gain_slider`], for local playback levels that may be boosted past 200%.
+fn playback_slider(ui: &mut egui::Ui, value: &mut u16, title: &str) -> egui::Response {
+	ranged_gain_slider(ui, value, title, PLAYBACK_MAX_PERCENT)
+}
+
+fn ranged_gain_slider(ui: &mut egui::Ui, value: &mut u16, title: &str, max: u16) -> egui::Response {
 	let title = crate::i18n::translate_if_key(title);
 	ui.scope(|ui| {
 		let colors = design::palette(ui);
 		ui.spacing_mut().item_spacing.y = 4.0;
 		let label = ui.label(RichText::new(title).size(13.0).color(colors.muted));
-		design::slider(ui, value, 0..=200, "%").labelled_by(label.id)
+		design::slider(ui, value, 0..=max, "%").labelled_by(label.id)
 	})
 	.inner
 }

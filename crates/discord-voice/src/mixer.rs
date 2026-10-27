@@ -92,7 +92,9 @@ impl Mixer {
 					.iter()
 					.take(64)
 					.find(|(user, _)| *user == speaker.user)
-					.map_or(100, |(_, percent)| (*percent).min(200)),
+					.map_or(100, |(_, percent)| {
+						(*percent).min(crate::MAX_PLAYBACK_PERCENT)
+					}),
 			) / 100.0;
 			let mut energy = 0.0;
 			let mut filled = 0;
@@ -144,10 +146,10 @@ impl Mixer {
 			}
 			speaker.activity = crate::activity::hold(energy, speaker.activity);
 		}
-		// ponytail: hard limiting bounds simultaneous speakers; add a soft limiter if clipping is audible.
+		// Boosted (up to 400%) and simultaneous speakers can exceed full scale; bend instead of clip.
 		output
 			.iter_mut()
-			.for_each(|sample| *sample = sample.clamp(-1.0, 1.0));
+			.for_each(|sample| *sample = crate::soft_limit(*sample));
 		(active.then_some(output), heard)
 	}
 }
@@ -212,7 +214,8 @@ mod tests {
 				(vec![(1, 200), (2, 0)], 0.2),
 				(vec![(1, 0), (2, 0)], 0.0),
 				(vec![(99, 0)], 0.3),
-				(vec![(1, u16::MAX)], 0.4),
+				// Oversized values clamp to the 400% Volume Booster ceiling.
+				(vec![(1, u16::MAX)], 0.6),
 			] {
 				for speaker in &mut mixer.speakers {
 					speaker.pcm.fill(speaker.user as f32 * 0.1);
@@ -233,11 +236,11 @@ mod tests {
 			}
 			assert!(
 				mixer
-					.pop_with_volumes(&[(1, 200)])
+					.pop_with_volumes(&[(1, 400)])
 					.0
 					.unwrap()
 					.iter()
-					.all(|s| *s == 1.0)
+					.all(|s| *s > 0.99 && *s <= 1.0)
 			);
 		}
 	}
