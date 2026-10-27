@@ -3,13 +3,13 @@
 # Every 6 hours (and on demand from the Actions tab) it:
 #   1. merges upstream `main` into this fork's `main` (a normal merge commit; fork changes are kept),
 #   2. merges `main` into the long-lived `plugins` branch so extension work stays current.
-# Nothing is force-pushed. If a merge has conflicts, or GitHub refuses it (upstream changed a
-# workflow file and the token lacks the `workflow` scope), it stops, explains what to do
-# and leaves the branches untouched. Failures are explained in the run summary, and GitHub emails
-# the owner about failed scheduled runs (issues are disabled on this repository).
+# It uses plain git (fetch, merge, push), never force-pushes, and keeps the fork's README.md when
+# upstream edits it. If a merge has other conflicts it stops, leaves the branches untouched and
+# explains what to do in the run summary; GitHub emails the owner about failed scheduled runs.
 #
-# Optional secret SYNC_TOKEN: a token with `repo` + `workflow` scope. Without it the built-in
-# token is used, which cannot merge upstream commits that modify .github/workflows/.
+# Secret SYNC_TOKEN: a fine-grained token with Contents + Workflows read/write on this repository.
+# (GitHub's built-in token cannot push upstream changes to .github/workflows/, and the REST
+# "sync fork" endpoint rejects fine-grained tokens, so the sync is done with git instead.)
 name: Sync upstream
 
 on:
@@ -28,80 +28,68 @@ jobs:
   sync:
     if: github.repository == 'HaraldErik/Serein-Fork'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
-      REPO: ${{ github.repository }}
+    timeout-minutes: 15
     steps:
-      - name: Merge upstream main into main
-        id: upstream
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream main into main, then main into plugins
+        id: sync
         run: |
-          set -u
-          if out=$(gh api -X POST "repos/$REPO/merge-upstream" -f branch=main 2>&1); then
-            echo "$out"
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "$out"
+          set -euo pipefail
+          git config user.name "serein-fork-sync[bot]"
+          git config user.email "serein-fork-sync@users.noreply.github.com"
+          # README.md is the fork's own; keep it when upstream changes it.
+          echo "README.md merge=ours" >> .git/info/attributes
+          git config merge.ours.driver true
+          git remote add upstream https://github.com/ViceVerse-cz/Serein.git
+          git fetch --no-tags upstream main
+
+          fail() {
             {
-              echo "ok=false"
-              echo "step=upstream → main"
-              echo "detail<<EOF"
-              echo "$out"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+              echo "## Upstream sync needs help"
+              echo
+              echo "Step: **$1**"
+              echo
+              echo "$2"
+              echo
+              echo "The branches were left unchanged."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Upstream sync needs help::$1: $2"
+            exit 1
+          }
+
+          behind=$(git rev-list --count HEAD..upstream/main)
+          echo "main is $behind commit(s) behind upstream"
+          if [ "$behind" -gt 0 ]; then
+            if ! git merge --no-edit -m "Merge upstream ViceVerse-cz/Serein main (automatic sync)" upstream/main; then
+              files=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+              git merge --abort
+              fail "upstream → main" "Upstream and this fork changed the same lines in:"$'\n'"$files"$'\n\n'"Merge by hand (git fetch upstream && git merge upstream/main), fix the conflicts and push."
+            fi
+            git push origin HEAD:main || fail "push main" "Pushing failed. Check that SYNC_TOKEN exists and has Contents and Workflows read/write on this repository."
+            echo "- Merged $behind upstream commit(s) into **main**." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Proves the token can still push, so a broken token is noticed before it matters.
+            git push --dry-run origin HEAD:main || fail "token check" "SYNC_TOKEN cannot push to this repository (Contents and Workflows need read/write)."
+            echo "- **main** is already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Merge main into plugins
-        id: plugins
-        if: steps.upstream.outputs.ok == 'true'
-        run: |
-          set -u
-          if ! gh api "repos/$REPO/branches/plugins" > /dev/null 2>&1; then
-            echo "No plugins branch; nothing to do."
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if git ls-remote --exit-code --heads origin plugins > /dev/null; then
+            git fetch --no-tags origin plugins
+            git checkout -q -B plugins origin/plugins
+            if git merge-base --is-ancestor main plugins; then
+              echo "- **plugins** already contains main." >> "$GITHUB_STEP_SUMMARY"
+            else
+              if ! git merge --no-edit -m "Merge main into plugins (automatic upstream sync)" main; then
+                files=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+                git merge --abort
+                fail "main → plugins" "main and plugins changed the same lines in:"$'\n'"$files"$'\n\n'"Merge main into plugins by hand and push."
+              fi
+              git push origin plugins || fail "push plugins" "Pushing plugins failed; check SYNC_TOKEN."
+              echo "- Merged **main** into **plugins**." >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
-          # 201 = merged, 204 = already up to date; anything else is reported.
-          if out=$(gh api -X POST "repos/$REPO/merges" -f base=plugins -f head=main \
-              -f commit_message="Merge main into plugins (automatic upstream sync)" -i 2>&1); then
-            echo "$out" | head -1
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "$out"
-            {
-              echo "ok=false"
-              echo "step=main → plugins"
-              echo "detail<<EOF"
-              echo "$out" | tail -5
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Report a sync that needs help
-        if: steps.upstream.outputs.ok == 'false' || steps.plugins.outputs.ok == 'false'
-        env:
-          STEP: ${{ steps.upstream.outputs.step || steps.plugins.outputs.step }}
-          DETAIL: ${{ steps.upstream.outputs.detail || steps.plugins.outputs.detail }}
-        run: |
-          set -u
-          case "$DETAIL" in
-            *onflict*) why="Upstream and this fork changed the same lines. Merge by hand (git fetch upstream && git merge upstream/main), fix the conflicts, push, then re-run this workflow." ;;
-            *orkflow*) why="Upstream changed a file in .github/workflows/ and the token may not change workflows. Add a repository secret SYNC_TOKEN (token with repo + workflow scope) and re-run." ;;
-            *) why="The merge failed for another reason; see the details below." ;;
-          esac
-          {
-            echo "## Upstream sync needs help"
-            echo
-            echo "Step: **$STEP**"
-            echo
-            echo "$why"
-            echo
-            echo "The branches were left unchanged."
-            echo
-            echo '```'
-            echo "$DETAIL"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=Upstream sync needs help::$STEP: $why"
-          # A failed scheduled run makes GitHub email the repository owner.
-          exit 1
