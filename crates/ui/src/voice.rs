@@ -129,7 +129,7 @@ impl MessagingUi {
 		} else {
 			self.voice_stream_volume
 				.unwrap_or(100)
-				.min(PLAYBACK_MAX_PERCENT)
+				.min(self.builtin.volume_booster.ceiling())
 		}
 	}
 
@@ -141,6 +141,11 @@ impl MessagingUi {
 			.as_deref()
 			.copied()
 			.unwrap_or([(0, 100); 64]);
+		// Volume Booster off (or a lower Config ceiling) caps saved boosts without erasing them.
+		let ceiling = self.builtin.volume_booster.ceiling();
+		for slot in &mut values {
+			slot.1 = slot.1.min(ceiling);
+		}
 		for user in self.voice_user_muted.iter().copied() {
 			if let Some(slot) = values.iter_mut().find(|(id, _)| *id == user) {
 				slot.1 = 0;
@@ -301,6 +306,7 @@ impl MessagingUi {
 						ui,
 						&mut volume,
 						"voice-voice-participant-menu-user-volume",
+						self.builtin.volume_booster.ceiling(),
 					)
 					.changed();
 					let reset = ui
@@ -1567,10 +1573,12 @@ impl MessagingUi {
 			&mut self.voice_stream_muted,
 			crate::i18n::translate("voice-stream-audio-controls-mute-stream-audio"),
 		);
+		let ceiling = self.builtin.volume_booster.ceiling();
 		playback_slider(
 			ui,
 			self.voice_stream_volume.get_or_insert(100),
 			"voice-stream-audio-controls-stream-volume",
+			ceiling,
 		);
 	}
 
@@ -4711,17 +4719,22 @@ pub(super) fn participant_user(state: &State, channel: Id, user: Id) -> Option<&
 }
 
 /// Labelled percentage slider shared by the voice popout and the settings page.
-/// Participant and stream playback ceiling (Volume Booster); must match
-/// `discord_voice::MAX_PLAYBACK_PERCENT`, which the mixer enforces.
-pub(crate) const PLAYBACK_MAX_PERCENT: u16 = 400;
-
 fn gain_slider(ui: &mut egui::Ui, value: &mut u16, title: &str) -> egui::Response {
 	ranged_gain_slider(ui, value, title, 200)
 }
 
-/// Like [`gain_slider`], for local playback levels that may be boosted past 200%.
-fn playback_slider(ui: &mut egui::Ui, value: &mut u16, title: &str) -> egui::Response {
-	ranged_gain_slider(ui, value, title, PLAYBACK_MAX_PERCENT)
+/// Like [`gain_slider`], for local playback levels; `ceiling` comes from the Volume Booster
+/// built-in extension (200% when it is off).
+fn playback_slider(
+	ui: &mut egui::Ui,
+	value: &mut u16,
+	title: &str,
+	ceiling: u16,
+) -> egui::Response {
+	if *value > ceiling {
+		*value = ceiling;
+	}
+	ranged_gain_slider(ui, value, title, ceiling)
 }
 
 fn ranged_gain_slider(ui: &mut egui::Ui, value: &mut u16, title: &str, max: u16) -> egui::Response {

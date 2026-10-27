@@ -23,6 +23,25 @@ Read the code and only the docs relevant to the requested change. Useful referen
 for UI, `docs/discord-compatibility.md` for protocol, `docs/storage-policy.md` for persistence,
 `docs/platform-support.md` for platform work, and the extension SDK docs for authoring changes.
 
+## Extensions-first rule (fork)
+
+Owner decision; every change in this fork follows it. New features (Equicord/Vencord ports and
+quality-of-life additions) are **extensions**, toggled and configured only under
+Settings → Extensions:
+
+- **Plugin first.** If the Wasm plugin API (`docs/plugin-guide.md`) can do it, write a plugin in
+  `extensions/plugins/<name>/` with its own manifest, and put its options in the plugin's panel.
+  If the API is missing a small capability, extend the API rather than going native.
+- **Otherwise a built-in extension.** Native code is allowed only when the sandbox cannot do the
+  job (audio/voice, composer buttons, per-frame UI). Register it in
+  `crates/ui/src/builtin_extensions.rs` (switch + Config) and keep its saved state in
+  `model::BuiltinExtensions` (`crates/model/src/builtin_extensions.rs`, with serde defaults and
+  `is_valid` bounds). Feature code reads its on/off and options only from there.
+- **Never** add a feature's toggle or options to ordinary settings pages (`settings.rs` Chat,
+  Voice, Appearance…), and never ship a feature that cannot be turned off.
+- Update the "Built-in extensions today" table in `README.md` whenever one is added, changed or
+  moved to a plugin.
+
 ## Delivery
 
 Feature/fix requests authorize implementation and the ordinary tested PR workflow: task branch,
