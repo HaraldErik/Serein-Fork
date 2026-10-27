@@ -1,0 +1,107 @@
+# Keeps this fork up to date with ViceVerse-cz/Serein automatically.
+#
+# Every 6 hours (and on demand from the Actions tab) it:
+#   1. merges upstream `main` into this fork's `main` (a normal merge commit; fork changes are kept),
+#   2. merges `main` into the long-lived `plugins` branch so extension work stays current.
+# Nothing is force-pushed. If a merge has conflicts, or GitHub refuses it (upstream changed a
+# workflow file and the token lacks the `workflow` scope), it stops, explains what to do
+# and leaves the branches untouched. Failures are explained in the run summary, and GitHub emails
+# the owner about failed scheduled runs (issues are disabled on this repository).
+#
+# Optional secret SYNC_TOKEN: a token with `repo` + `workflow` scope. Without it the built-in
+# token is used, which cannot merge upstream commits that modify .github/workflows/.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'HaraldErik/Serein-Fork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Merge upstream main into main
+        id: upstream
+        run: |
+          set -u
+          if out=$(gh api -X POST "repos/$REPO/merge-upstream" -f branch=main 2>&1); then
+            echo "$out"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$out"
+            {
+              echo "ok=false"
+              echo "step=upstream → main"
+              echo "detail<<EOF"
+              echo "$out"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge main into plugins
+        id: plugins
+        if: steps.upstream.outputs.ok == 'true'
+        run: |
+          set -u
+          if ! gh api "repos/$REPO/branches/plugins" > /dev/null 2>&1; then
+            echo "No plugins branch; nothing to do."
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 201 = merged, 204 = already up to date; anything else is reported.
+          if out=$(gh api -X POST "repos/$REPO/merges" -f base=plugins -f head=main \
+              -f commit_message="Merge main into plugins (automatic upstream sync)" -i 2>&1); then
+            echo "$out" | head -1
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$out"
+            {
+              echo "ok=false"
+              echo "step=main → plugins"
+              echo "detail<<EOF"
+              echo "$out" | tail -5
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report a sync that needs help
+        if: steps.upstream.outputs.ok == 'false' || steps.plugins.outputs.ok == 'false'
+        env:
+          STEP: ${{ steps.upstream.outputs.step || steps.plugins.outputs.step }}
+          DETAIL: ${{ steps.upstream.outputs.detail || steps.plugins.outputs.detail }}
+        run: |
+          set -u
+          case "$DETAIL" in
+            *onflict*) why="Upstream and this fork changed the same lines. Merge by hand (git fetch upstream && git merge upstream/main), fix the conflicts, push, then re-run this workflow." ;;
+            *orkflow*) why="Upstream changed a file in .github/workflows/ and the token may not change workflows. Add a repository secret SYNC_TOKEN (token with repo + workflow scope) and re-run." ;;
+            *) why="The merge failed for another reason; see the details below." ;;
+          esac
+          {
+            echo "## Upstream sync needs help"
+            echo
+            echo "Step: **$STEP**"
+            echo
+            echo "$why"
+            echo
+            echo "The branches were left unchanged."
+            echo
+            echo '```'
+            echo "$DETAIL"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Upstream sync needs help::$STEP: $why"
+          # A failed scheduled run makes GitHub email the repository owner.
+          exit 1
