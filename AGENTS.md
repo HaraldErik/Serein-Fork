@@ -37,8 +37,12 @@ Settings → Extensions:
   `crates/ui/src/builtin_extensions.rs` (switch + Config) and keep its saved state in
   `model::BuiltinExtensions` (`crates/model/src/builtin_extensions.rs`, with serde defaults and
   `is_valid` bounds). Feature code reads its on/off and options only from there.
+- Built-in extensions default to **off**; the user opts in on the Extensions page.
 - **Never** add a feature's toggle or options to ordinary settings pages (`settings.rs` Chat,
   Voice, Appearance…), and never ship a feature that cannot be turned off.
+- Work on extensions and plugins goes on the one long-lived `plugins` branch; do not create a
+  branch per plugin. Keep its PR into `main` open and update it; merge `main` into `plugins` when
+  it falls behind.
 - Update the "Built-in extensions today" table in `README.md` whenever one is added, changed or
   moved to a plugin.
 

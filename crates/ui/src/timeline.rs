@@ -42,6 +42,8 @@ pub struct TimelineView {
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
 	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
 	pub(super) decorations: crate::plugin_decorations::SharedCache,
+	/// Silent Message Toggle built-in extension: mark silent messages with a bell-with-z.
+	pub(super) silent_badges: bool,
 	/// Messages the reader chose to show despite a plugin presentation; cleared per channel.
 	plugin_revealed: std::collections::BTreeSet<Id>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
@@ -3351,6 +3353,21 @@ impl TimelineView {
 														crate::local_time::full(time)
 													});
 												surface.exclude(time.rect);
+												if self.silent_badges
+													&& message.suppress_notifications
+												{
+													let bell = crate::icons::silent_bell(
+														ui,
+														15.0,
+														colors.muted,
+													)
+													.on_hover_text(
+														crate::i18n::translate(
+															"timeline-silent-message",
+														),
+													);
+													surface.exclude(bell.rect);
+												}
 											},
 										);
 									}
