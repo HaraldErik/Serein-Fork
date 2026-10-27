@@ -509,8 +509,8 @@ existing call's mute controls still apply.
 
 | Nested `type` / Rust variant | Fields | Apply behavior |
 | --- | --- | --- |
-| `set_participant_audio` / `SetParticipantAudio` | `user_id`: ID; `volume_percent: Option<u16>`; `muted: Option<bool>` | Change local playback of a remote participant still in the current call. Volume is 0-200; mute preserves its configured gain for later unmute. Cannot target yourself. |
-| `set_stream_audio` / `SetStreamAudio` | `volume_percent: Option<u16>`; `muted: Option<bool>` | Change local playback of the currently watched stream. Volume is 0-200. Unavailable without a watched stream. |
+| `set_participant_audio` / `SetParticipantAudio` | `user_id`: ID; `volume_percent: Option<u16>`; `muted: Option<bool>` | Change local playback of a remote participant still in the current call. Volume is 0-400; mute preserves its configured gain for later unmute. Cannot target yourself. |
+| `set_stream_audio` / `SetStreamAudio` | `volume_percent: Option<u16>`; `muted: Option<bool>` | Change local playback of the currently watched stream. Volume is 0-400. Unavailable without a watched stream. |
 | `select_audio_devices` / `SelectAudioDevices` | `input_id`, `output_id`: string or null | Select at least one currently enumerated microphone/speaker by its exact host ID. Missing/null preserves that side. **Preview.** |
 | `refresh_media_devices` / `RefreshMediaDevices` | None | Ask the host to refresh its microphone, speaker and camera lists. It does not return those private lists to Wasm. **Preview.** |
 

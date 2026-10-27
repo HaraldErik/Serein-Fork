@@ -812,7 +812,7 @@ requests and adaptive bitrate remain unsupported. The viewer accepts announced R
 packets and bounded packet reordering within the current picture; native/live video
 quality is not established by these changes.
 
-Watched streams have a session-only 0–200% audio volume and mute control, independent
+Watched streams have a session-only 0–400% audio volume and mute control, independent
 of participant voice levels. Audio playout retains at most two queued 20 ms frames
 and clears delayed mixer output after a stall. Decoder input is bounded to 16 pictures
 and 16 MiB, with a 150 ms age limit and keyframe recovery. These bounds reduce backlog;
