@@ -54,6 +54,7 @@ mod emoji_picker;
 mod emoticons;
 pub mod fonts;
 pub mod i18n;
+mod send_tools;
 #[cfg(all(debug_assertions, feature = "demo"))]
 pub fn debug_channel_creation(state: client_core::State) {
 	channel_menu::debug_creation(state);
@@ -254,6 +255,14 @@ pub struct MessagingUi {
 	pub language: i18n::Language,
 	forwarding: forwarding::ForwardDialog,
 	pub convert_emoticons: bool,
+	/// Device preference (ClearURLs): strip tracking parameters from links when sending.
+	pub clear_urls: bool,
+	/// Device preference (SendTimestamps): `` `18:30` `` becomes a local-time timestamp.
+	pub send_timestamps: bool,
+	/// Composer bell toggle: send the next message silently, then switch back off.
+	silent_next: bool,
+	/// Device preference: show the composer's silent-message toggle.
+	pub silent_message_toggle: bool,
 	/// Device preference: request a conversation's page while the pointer rests on it.
 	pub preload_on_hover: bool,
 	preload: preload::Preload,
@@ -2787,14 +2796,19 @@ impl MessagingUi {
 				Some((state.generation, channel, assets, draft.to_owned()));
 			return;
 		}
-		let original_draft = if self.convert_emoticons {
-			state.drafts.get_mut(&channel).map(|draft| {
-				let converted = emoticons::convert(draft);
-				std::mem::replace(draft, converted)
-			})
-		} else {
-			None
-		};
+		let silent = std::mem::take(&mut self.silent_next);
+		let original_draft =
+			if self.convert_emoticons || self.clear_urls || self.send_timestamps || silent {
+				state.drafts.get_mut(&channel).map(|draft| {
+					let mut converted = self.rewrite_for_send(draft);
+					if silent {
+						converted = send_tools::make_silent(&converted);
+					}
+					std::mem::replace(draft, converted)
+				})
+			} else {
+				None
+			};
 		if let Some(command) = state.prepare_send_with_attachments(
 			&self
 				.selected_files()
@@ -2806,9 +2820,28 @@ impl MessagingUi {
 			self.stage_pending_upload(ctx, &command);
 			self.timeline.follow_latest(state);
 			commands.push(command);
-		} else if let Some(original) = original_draft {
-			state.drafts.insert(channel, original);
+		} else {
+			// Nothing was sent: keep the typed draft and the bell state for the retry.
+			self.silent_next = silent;
+			if let Some(original) = original_draft {
+				state.drafts.insert(channel, original);
+			}
 		}
+	}
+	/// Applies the enabled device-local rewrites (emoticons, ClearURLs, SendTimestamps).
+	fn rewrite_for_send(&self, text: &str) -> String {
+		let mut text = if self.convert_emoticons {
+			emoticons::convert(text)
+		} else {
+			text.to_owned()
+		};
+		if self.clear_urls {
+			text = send_tools::clear_urls(&text);
+		}
+		if self.send_timestamps {
+			text = send_tools::send_timestamps(&text, local_time::now());
+		}
+		text
 	}
 	/// Submits message drafts or edits after applying the device conversion preference.
 	/// Accept or ignore a pending message request, as in Discord's request conversation view.
@@ -3515,6 +3548,16 @@ impl MessagingUi {
                             })
                             .inner;
                         let send = enter || send_button.clicked();
+                        if self.silent_message_toggle && !editing_here && !application_command {
+                            let label = if self.silent_next {
+                                "lib-silent-toggle-on"
+                            } else {
+                                "lib-silent-toggle-off"
+                            };
+                            if icons::toggle(ui, icons::Icon::Bell, 28.0, self.silent_next, label).clicked() {
+                                self.silent_next = !self.silent_next;
+                            }
+                        }
                         if count_before + 200 >= max_content {
                             ui.label(
                                 RichText::new(format!("{}", max_content.saturating_sub(count_before)))
@@ -3867,7 +3910,7 @@ impl MessagingUi {
                             if let Some((edit_channel, message, content)) = &editing {
                                 if state.freshness == Freshness::Fresh
                                     && let Some(command) = state.prepare_edit(*edit_channel, *message,
-                                        if self.convert_emoticons { emoticons::convert(content) } else { content.clone() })
+                                        self.rewrite_for_send(content))
                                 {
                                     if let Command::Edit { content: submitted, .. } = &command {
                                         self.edit_sent = Some(SubmittedEdit {
