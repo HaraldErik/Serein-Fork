@@ -4,8 +4,9 @@
 #   1. merges upstream `main` into this fork's `main` (a normal merge commit; fork changes are kept),
 #   2. merges `main` into the long-lived `plugins` branch so extension work stays current.
 # Nothing is force-pushed. If a merge has conflicts, or GitHub refuses it (upstream changed a
-# workflow file and the token lacks the `workflow` scope), it opens one issue explaining what to do
-# and leaves the branches untouched.
+# workflow file and the token lacks the `workflow` scope), it stops, explains what to do
+# and leaves the branches untouched. Failures are explained in the run summary, and GitHub emails
+# the owner about failed scheduled runs (issues are disabled on this repository).
 #
 # Optional secret SYNC_TOKEN: a token with `repo` + `workflow` scope. Without it the built-in
 # token is used, which cannot merge upstream commits that modify .github/workflows/.
@@ -18,7 +19,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 concurrency:
   group: sync-upstream
@@ -82,20 +82,26 @@ jobs:
         env:
           STEP: ${{ steps.upstream.outputs.step || steps.plugins.outputs.step }}
           DETAIL: ${{ steps.upstream.outputs.detail || steps.plugins.outputs.detail }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -u
-          title="Upstream sync needs help"
           case "$DETAIL" in
-            *workflow*) why="GitHub refused the merge because upstream changed a file in .github/workflows/ and the token has no \`workflow\` permission. Add a repository secret named SYNC_TOKEN (a token with repo + workflow scope), then re-run this workflow." ;;
-            *409*|*onflict*) why="The merge has conflicts between upstream and this fork's changes. Merge it manually (for example: git fetch upstream && git merge upstream/main), fix the conflicts and push." ;;
-            *) why="The merge failed for another reason; see the details and the run log." ;;
+            *onflict*) why="Upstream and this fork changed the same lines. Merge by hand (git fetch upstream && git merge upstream/main), fix the conflicts, push, then re-run this workflow." ;;
+            *orkflow*) why="Upstream changed a file in .github/workflows/ and the token may not change workflows. Add a repository secret SYNC_TOKEN (token with repo + workflow scope) and re-run." ;;
+            *) why="The merge failed for another reason; see the details below." ;;
           esac
-          body=$(printf 'Step: **%s**\n\n%s\n\nRun: %s\n\n```\n%s\n```\n\nThe branches were left unchanged. This issue is reused while it stays open.' "$STEP" "$why" "$RUN_URL" "$DETAIL")
-          existing=$(gh issue list -R "$REPO" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" -R "$REPO" --body "$body"
-          else
-            gh issue create -R "$REPO" --title "$title" --body "$body"
-          fi
+          {
+            echo "## Upstream sync needs help"
+            echo
+            echo "Step: **$STEP**"
+            echo
+            echo "$why"
+            echo
+            echo "The branches were left unchanged."
+            echo
+            echo '```'
+            echo "$DETAIL"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Upstream sync needs help::$STEP: $why"
+          # A failed scheduled run makes GitHub email the repository owner.
           exit 1
