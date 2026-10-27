@@ -34,7 +34,8 @@ call has hard limits.
 | Installed plugins | 64 per scope |
 | Decoration cache | 2,048 entries / 4 MiB, oldest evicted first |
 
-A plugin cannot read your token, open files, use the network or call Discord directly. Actions that
+A plugin cannot read your token, open files, open its own network connections or call Discord
+directly (the preview `network` capability lets Serein download from hosts the plugin lists). Actions that
 change something (send, edit, delete, react, join a call…) are **proposals** that wait for your
 click on **Apply**.
 
@@ -156,9 +157,14 @@ Each action has an `id`, a `label` and a `surface` that decides when it runs:
 | `message` | You pick it from a message's menu | panel or proposal about that message |
 | `composer` | You pick it from the composer **Tools** menu | `replacement` draft text |
 | `message_event` | A message is created, edited or deleted | `storage`, or a **decoration** |
+| `decorate` | Preview: the conversation's loaded messages change | per-message **decorations** |
+| `fetch_result` | Preview: a download this plugin asked for finished | `storage`, or a panel if a button started it |
+| `schedule` | Preview: about once a minute while enabled, first right after enabling | `storage`, `appearance`, or a `fetch` |
 | `app_event` | Connection, navigation, voice, settings… change | `storage` |
 | `activation` | The plugin is enabled or the account loads | presence, API proxy, retention flags |
 | `tick` | Preview: timed appearance updates | `appearance` |
+| `before_send` | Preview: you press **Send** with text in the draft | `replacement` text that is sent instead |
+| `command` | Preview: you type `/<action id> arguments` and press Enter | `replacement` placed in the draft, and/or a panel or proposal |
 
 Event surfaces cannot show panels or propose actions; they stay passive.
 
@@ -207,10 +213,124 @@ Manifest: `"capabilities": ["message_events", "decorations"]` and an action with
 | --- | --- |
 | `badges` | up to 4; text up to 16 characters; tooltip up to 128 bytes; `color` as `0xRRGGBB` |
 | `prefix` / `suffix` | up to 64 bytes each, no control characters |
-| `presentation` | `blur`, `collapse`, `hide` are accepted but **not applied yet** |
+| `presentation` | `blur`, `collapse` or `hide`: the message body is replaced by a "… by a plugin. Click to show." placeholder until you click it. All three currently look the same apart from the wording. |
 
-Current gaps: decorations show only in the normal (non-compact) message layout; they only appear for
-messages seen after the plugin is enabled; there are no user or server decorations yet.
+### Decorating messages that are already loaded
+
+`message_event` only sees new and edited messages. To decorate history too, add an action with
+`"surface": "decorate"` (requires `decorations` and `message_events`). Serein calls it with up to 32
+of the conversation's loaded messages in `messages` (newest first, at most 48 KiB of text) whenever
+that set changes: you open a conversation, older history loads, a message is edited, or the plugin is
+enabled. Return one entry per message in `decorations`:
+
+```rust
+use serein_extension_sdk::{DecorateInvocation, DecorationOutput, MessageDecoration};
+
+fn handle(input: DecorateInvocation) -> DecorationOutput {
+    let mut output = DecorationOutput::default();
+    if input.invocation.action == "decorate" {
+        output.decorations = input.messages.into_iter()
+            .filter_map(|m| Some(MessageDecoration {
+                message_id: m.message_id,
+                decoration: my_badges(m.content.as_deref()?)?,
+            }))
+            .collect();
+    }
+    output
+}
+```
+
+`DecorateInvocation` also carries `message_event`, so one handler can serve both actions, as
+[`link-badges`](../examples/extensions/link-badges/src/lib.rs) does. Each `message_id` must come from
+the batch; a `decorate` result may only contain `decorations` and `storage`.
+
+Current gaps: decorations show only in the normal (non-compact) message layout, and there are no user
+or server decorations yet.
+
+## Send hooks: rewrite the draft when you press Send (preview)
+
+An action with `"surface": "before_send"` (requires the `composer` capability) receives the draft in
+`composer` every time you press **Send**. Return `replacement` to change what is sent, or nothing to
+send the draft unchanged. Pressing Send is the confirmation, so no Apply click is needed.
+
+```rust
+use serein_extension_sdk::{Invocation, Output};
+
+fn handle(input: Invocation) -> Output {
+    let Some(draft) = input.composer else { return Output::default() };
+    let fixed = draft.replace(" teh ", " the ");
+    Output { replacement: (fixed != draft).then_some(fixed), ..Default::default() }
+}
+serein_extension_sdk::export!(handle);
+```
+
+How the host runs them:
+
+- All enabled `before_send` actions run one after another, in ascending plugin-ID order. Each one
+  sees the previous plugin's text.
+- The message is sent once every plugin has finished. If any plugin fails, is disabled, takes longer
+  than 15 seconds, or you edit the draft or switch conversation meanwhile, nothing is sent and your
+  draft is kept.
+- A `before_send` result may only contain `replacement` and `storage`; panels, effects and other
+  outputs are rejected.
+- Hooks run for typed drafts (with or without attachments). Message edits, stickers, GIFs and slash
+  commands do not run them.
+
+Complete tested example with a settings panel: [`examples/extensions/text-replace`](../examples/extensions/text-replace/src/lib.rs).
+
+## Slash commands (preview)
+
+An action with `"surface": "command"` (requires `composer`) becomes a slash command named after its
+action `id` (lowercase letters, digits and `-`, at most 32 characters). Typing `/mock hello` and
+pressing Enter runs the plugin with `action = "mock"` and `composer = "hello"`.
+
+- A returned `replacement` **replaces the draft**; you review it and press Enter again to send. A
+  command never sends a message by itself.
+- Panels and Apply proposals work as for other foreground actions, so a command can also open a tool.
+- Built-in commands (`/me`, `/shrug`, `/gif`, `/msg`, `/spoiler`, `/sticker`, `/tableflip`, `/unflip`)
+  and server application commands you pick from the list take priority. If two plugins declare the
+  same name, the one with the lowest plugin ID wins.
+- If you edit the draft or switch conversation before the result arrives, it is discarded.
+- Enabled plugins' commands appear in the slash-command suggestions as "Plugin · <name>", using the
+  action `label` as the description.
+
+Example: [`examples/extensions/fun-commands`](../examples/extensions/fun-commands/src/lib.rs)
+(`/mock`, `/reverse`, `/upper`).
+
+## Downloading data (preview, pull-only)
+
+With the `network` capability a plugin can ask Serein to download from the hosts it lists. Nothing is
+uploaded: there is no request body, no cookies and no credentials. The host sends a plain HTTPS GET.
+
+```json
+"capabilities": ["network", "storage"],
+"network_hosts": ["api.github.com"],
+"actions": [
+  {"id": "fetch", "label": "Get a new saying", "surface": "panel"},
+  {"id": "fetched", "label": "Receive a saying", "surface": "fetch_result"}
+]
+```
+
+1. Any action except `tick` and `before_send` returns `fetch: {"id": "zen", "url": "https://api.github.com/zen"}`
+   (SDK: `NetworkOutput`).
+2. Serein checks the URL against `network_hosts` (exact names, HTTPS, port 443), downloads at most
+   64 KiB within 15 seconds, and follows redirects only to listed hosts.
+3. Your `fetch_result` action receives `fetch_result` with `body` (UTF-8) or `error` (SDK:
+   `NetworkInvocation`). Save what you need with `storage`; other hooks (decorations, commands, send
+   hooks) can read it later. A panel is shown only if a button or command started the download.
+
+Limits: up to 8 hosts per plugin, one download in flight and 10 per minute per plugin. The consent
+screen lists the hosts. Those sites see your IP address and the URLs you build, so never put private
+data in a URL. Example: [`examples/extensions/github-zen`](../examples/extensions/github-zen/src/lib.rs).
+
+## Timers (preview)
+
+An action with `"surface": "schedule"` needs no extra capability and runs about once a minute while
+the plugin is enabled and an account is signed in, the first time right after enabling. `tick_ms` holds
+the milliseconds since enabling; there is no wall clock, so use it to act less often, for example only
+when `tick_ms / 600_000` changed since the value you saved. A scheduled run may return `storage`,
+`appearance` or a `fetch` (with `network`), never a panel or proposal. Runs share the bounded plugin
+event queue and never pile up: a run that has not started yet is not queued twice.
 
 ## Publishing and sharing
 
@@ -221,7 +341,7 @@ messages seen after the plugin is enabled; there are no user or server decoratio
 
 ## What is planned
 
-Decorations are the first piece of the [Plugin API v2](plugin-api-v2.md): UI entries (buttons, menu
+Decorations, send hooks, slash commands, pull-only downloads and timers are the first pieces of the [Plugin API v2](plugin-api-v2.md). Next: UI entries (buttons, menu
 items, settings pages), send hooks and commands, timers, storage with more keys, pull-only network
 access to hosts you approve, and limited auto-apply for low-risk actions. Plugins that depend on
 patching Discord's web client have no equivalent in a native client.

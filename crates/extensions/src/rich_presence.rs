@@ -287,6 +287,7 @@ mod tests {
 				label: "Apply".into(),
 				surface: Surface::Panel,
 			}],
+			network_hosts: Vec::new(),
 		};
 		let input = Invocation {
 			action: "apply".into(),

@@ -267,6 +267,8 @@ pub struct MessagingUi {
 	pub preload_on_hover: bool,
 	preload: preload::Preload,
 	pub image_share_requested: Option<(u64, Id, Vec<model::ImageShare>, String)>,
+	/// The next composer submit already ran `before_send` plugins.
+	send_hooks_applied: bool,
 	pub interaction_file_request: Option<String>,
 	interaction_components: components::Components,
 	pub verification: VerificationUi,
@@ -2783,6 +2785,11 @@ impl MessagingUi {
 		if self.upload_busy || self.image_share_requested.is_some() || !state.can_send(channel) {
 			return;
 		}
+		if !std::mem::take(&mut self.send_hooks_applied)
+			&& self.extensions.start_send_hooks(ctx, state)
+		{
+			return;
+		}
 		let draft = state.drafts.get(&channel).map_or("", String::as_str);
 		if self.selected_files().is_empty()
 			&& let Some(assets) = model::ImageShare::markdown_only(draft)
@@ -3340,6 +3347,7 @@ impl MessagingUi {
 			&& !self.ime_active
 			&& !ime_this_frame
 			&& ctx.memory(|m| m.has_focus(composer_id));
+		self.slash_commands.plugin_commands = self.extensions.plugin_commands();
 		self.slash_commands.refresh(
 			state,
 			channel,
@@ -3844,7 +3852,8 @@ impl MessagingUi {
                         let slash_preview = false;
                         #[cfg(feature = "demo")]
                         let slash_preview = state.demo && self.preview_slash_commands;
-                        self.slash_commands.refresh(state, channel, draft,
+                        self.slash_commands.plugin_commands = self.extensions.plugin_commands();
+		self.slash_commands.refresh(state, channel, draft,
                             !editing_here && keyboard_enabled && !self.ime_active && !ime_this_frame
                                 && (output.response.has_focus() || suggestion_pointer || self.slash_commands.active.is_some() || slash_preview));
                         if let Some(pick) = self.slash_commands.show(ui, composer_anchor, state, channel, &mut self.avatars)
@@ -3925,7 +3934,8 @@ impl MessagingUi {
                                     state.status = "Edit kept. Wait for your current message and connection, and enter nonempty text.";
                                 }
                             } else if self.send_application_command(state, channel, commands)
-                                || self.handle_builtin_slash(state, channel, ctx, commands) {
+                                || self.handle_builtin_slash(state, channel, ctx, commands)
+                                || (self.editing.is_none() && self.extensions.run_plugin_command(ctx, state)) {
                             } else if oversized {
                                 self.toasts.push(design::Level::Error, oversized_text(upload_limit));
                             } else if !self.upload_busy && !(state.demo && self.attachment.is_some()) {
@@ -4245,6 +4255,12 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
 		let mut commands = Vec::new();
+		if let Some((channel, text)) = self.extensions.take_ready_send(state) {
+			state.drafts.insert(channel, text);
+			self.send_hooks_applied = true;
+			self.submit_composer(state, ui.ctx(), &mut commands);
+			self.send_hooks_applied = false;
+		}
 		commands.extend(cosmetics_refresh);
 		// A server joined from an invite opens as soon as the Gateway delivers it.
 		commands.extend(state.navigate_after_join());

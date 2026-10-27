@@ -17,6 +17,7 @@ fn plugin(wasm: &str) -> Package {
 				label: "Run".into(),
 				surface: Surface::Composer,
 			}],
+			network_hosts: Vec::new(),
 		},
 		theme: None,
 		background_image: Vec::new(),

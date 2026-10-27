@@ -1,6 +1,6 @@
 //! Paints plugin badges from the bounded decoration cache; never calls a plugin.
 use egui::{Color32, RichText};
-use extensions::DecorationCache;
+use extensions::{DecorationCache, Presentation};
 use std::sync::Mutex;
 
 pub(crate) type SharedCache = std::sync::Arc<Mutex<DecorationCache>>;
@@ -25,4 +25,22 @@ pub(crate) fn paint(ui: &mut egui::Ui, cache: &SharedCache, message: u64) {
 			ui.label(RichText::new(suffix).small().weak());
 		}
 	}
+}
+
+/// Placeholder text when any plugin conceals this message; `None` shows it normally.
+pub(crate) fn concealed(cache: &SharedCache, message: u64) -> Option<&'static str> {
+	let cache = cache.lock().ok()?;
+	let strongest = cache
+		.get(message)
+		.filter_map(|(_, decoration)| decoration.presentation)
+		.max_by_key(|presentation| match presentation {
+			Presentation::Blur => 0,
+			Presentation::Collapse => 1,
+			Presentation::Hide => 2,
+		})?;
+	Some(match strongest {
+		Presentation::Blur => "Blurred by a plugin. Click to show.",
+		Presentation::Collapse => "Collapsed by a plugin. Click to show.",
+		Presentation::Hide => "Hidden by a plugin. Click to show.",
+	})
 }

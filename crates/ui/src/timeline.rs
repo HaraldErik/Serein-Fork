@@ -42,6 +42,8 @@ pub struct TimelineView {
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
 	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
 	pub(super) decorations: crate::plugin_decorations::SharedCache,
+	/// Messages the reader chose to show despite a plugin presentation; cleared per channel.
+	plugin_revealed: std::collections::BTreeSet<Id>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	/// A failed own row the reader dismissed this frame.
@@ -323,6 +325,16 @@ fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	};
 	(rows[..index].iter().map(|(_, height)| *height).sum::<f32>() + within).max(0.0)
 }
+const MAX_PLUGIN_REVEALS: usize = 256;
+
+impl TimelineView {
+	/// A plugin hid this message and the reader has not revealed it.
+	fn plugin_concealed(&self, id: Id) -> bool {
+		!self.plugin_revealed.contains(&id)
+			&& crate::plugin_decorations::concealed(&self.decorations, id.0).is_some()
+	}
+}
+
 fn layout_key(message: &Message) -> u64 {
 	// A layout fingerprint only; spoiler visibility uses exact text instead.
 	let mut key = DefaultHasher::new();
@@ -1086,8 +1098,9 @@ fn row_height_key(
 	boundary: Option<Id>,
 	state: &State,
 	deleted: bool,
+	concealed: bool,
 ) -> u64 {
-	row_key(message, previous, boundary, state) ^ u64::from(deleted)
+	row_key(message, previous, boundary, state) ^ u64::from(deleted) ^ (u64::from(concealed) << 1)
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool, compact: bool) {
 	let colors = crate::design::palette(ui);
@@ -2269,7 +2282,14 @@ impl TimelineView {
 				.map(|m| {
 					let prior = previous;
 					let deleted = state.timeline.is_deleted(m.id);
-					let key = row_height_key(m, prior, self.unread_boundary, state, deleted);
+					let key = row_height_key(
+						m,
+						prior,
+						self.unread_boundary,
+						state,
+						deleted,
+						self.plugin_concealed(m.id),
+					);
 					previous = Some(m);
 					let lines = m
 						.content
@@ -2702,6 +2722,7 @@ impl TimelineView {
 							self.unread_boundary,
 							state,
 							state.timeline.is_deleted(id),
+							self.plugin_concealed(id),
 						),
 						response.rect.height(),
 					));
@@ -2743,8 +2764,14 @@ impl TimelineView {
 					&& state.interactions.pending.is_none()
 					&& let Some(&(key, height)) = self.heights.get(&id)
 					&& key
-						== row_height_key(message, previous, self.unread_boundary, state, deleted)
-				{
+						== row_height_key(
+							message,
+							previous,
+							self.unread_boundary,
+							state,
+							deleted,
+							self.plugin_concealed(message.id),
+						) {
 					ui.add_space(height);
 					// Keep one result per row: visible height updates below zip by index.
 					measurements.push((id, key, height));
@@ -3305,6 +3332,34 @@ impl TimelineView {
 											..Default::default()
 										})
 										.show(ui, |ui| {
+											if let Some(label) =
+												(!self.plugin_revealed.contains(&id))
+													.then(|| {
+														crate::plugin_decorations::concealed(
+															&self.decorations,
+															id.0,
+														)
+													})
+													.flatten()
+											{
+												let reveal = ui.add(
+													egui::Button::new(
+														RichText::new(label)
+															.size(13.0)
+															.italics()
+															.color(colors.muted),
+													)
+													.frame(false),
+												);
+												surface.keep(&reveal);
+												if reveal.clicked()
+													&& self.plugin_revealed.len()
+														< MAX_PLUGIN_REVEALS
+												{
+													self.plugin_revealed.insert(id);
+												}
+												return;
+											}
 											if message.forwarded {
 												ui.label(
 													RichText::new(crate::i18n::translate(
@@ -4233,7 +4288,14 @@ impl TimelineView {
 				});
 				measurements.push((
 					id,
-					row_height_key(message, previous, self.unread_boundary, state, deleted),
+					row_height_key(
+						message,
+						previous,
+						self.unread_boundary,
+						state,
+						deleted,
+						self.plugin_concealed(message.id),
+					),
 					response.response.rect.height(),
 				));
 			}
@@ -5901,6 +5963,118 @@ mod tests {
 				assert!(editing.is_none() && !edit_started);
 			}
 		}
+	}
+
+	#[test]
+	fn plugin_decorations_paint_badges_and_hidden_text_needs_a_click() {
+		let ctx = egui::Context::default();
+		let mut message = text_message(1);
+		message.content = "Plugin hidden body".into();
+		let mut state = State {
+			demo: true,
+			selected: Some(message.channel),
+			..Default::default()
+		};
+		state
+			.timeline
+			.insert(message.clone(), false, false)
+			.unwrap();
+		let mut view = TimelineView::default();
+		view.decorations
+			.lock()
+			.unwrap()
+			.insert(
+				"plugin",
+				message.id.0,
+				extensions::Decoration {
+					badges: vec![extensions::Badge {
+						text: "TAG".into(),
+						..Default::default()
+					}],
+					presentation: Some(extensions::Presentation::Hide),
+					..Default::default()
+				},
+			)
+			.unwrap();
+		let mut images = crate::avatars::Avatars::default();
+		let mut render = |view: &mut TimelineView, state: &mut State, events| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					events,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(800.0, 700.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(&mut images, &mut crate::profiles::ProfileSession::default()),
+						None,
+					)
+				},
+			);
+			let mut labels = vec![];
+			fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+				match shape {
+					egui::Shape::Text(text) => {
+						labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+					}
+					egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, labels)),
+					_ => {}
+				}
+			}
+			for shape in &output.shapes {
+				collect(&shape.shape, &mut labels);
+			}
+			output.drop_without_applying_deltas();
+			labels
+		};
+		for _ in 0..3 {
+			render(&mut view, &mut state, vec![]);
+		}
+		let labels = render(&mut view, &mut state, vec![]);
+		let placeholder = "Hidden by a plugin. Click to show.";
+		assert!(labels.iter().any(|(text, _)| text == "TAG"));
+		assert!(
+			!labels
+				.iter()
+				.any(|(text, _)| text.contains("Plugin hidden body"))
+		);
+		let pos = labels
+			.iter()
+			.find(|(text, _)| text == placeholder)
+			.expect("placeholder replaces the hidden body")
+			.1
+			.center();
+		for pressed in [true, false] {
+			render(
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+		}
+		render(&mut view, &mut state, vec![]);
+		let labels = render(&mut view, &mut state, vec![]);
+		assert!(
+			labels
+				.iter()
+				.any(|(text, _)| text.contains("Plugin hidden body"))
+		);
+		assert!(!labels.iter().any(|(text, _)| text == placeholder));
 	}
 
 	#[test]
