@@ -20,6 +20,11 @@ pub(super) struct FolderUi {
 	generation: u64,
 	key: Option<(u64, u64)>,
 	rows: Box<[Row]>,
+	/// BetterFolders sidebar: open folders list their servers in the sidebar, not inline.
+	sidebar: bool,
+	/// The server selected last frame, so folder rules react once per selection change.
+	/// `None` until the first frame, which only records the restored selection.
+	last_guild: Option<Option<Id>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Item {
@@ -52,7 +57,9 @@ impl FolderUi {
 			for set in [&mut self.expanded, &mut self.closing] {
 				set.retain(|id| settings.folders.iter().any(|f| f.id == Some(*id)));
 			}
-			let shown = |id| self.expanded.contains(&id) || self.closing.contains(&id);
+			let sidebar = self.sidebar;
+			let shown =
+				|id| !sidebar && (self.expanded.contains(&id) || self.closing.contains(&id));
 			for folder in &settings.folders {
 				if !folder.guild_ids.iter().any(|&id| state.guild(id).is_some()) {
 					continue;
@@ -87,13 +94,67 @@ impl FolderUi {
 		true
 	}
 	fn toggle(&mut self, id: u64) {
+		if self.expanded.contains(&id) {
+			self.close(id);
+		} else {
+			self.open(id);
+		}
+	}
+	fn open(&mut self, id: u64) {
+		if self.expanded.insert(id) {
+			self.closing.remove(&id);
+			self.key = None;
+		}
+	}
+	fn close(&mut self, id: u64) {
 		if self.expanded.remove(&id) {
 			self.closing.insert(id);
-		} else {
-			self.expanded.insert(id);
-			self.closing.remove(&id);
+			self.key = None;
 		}
-		self.key = None;
+	}
+	fn close_all_except(&mut self, keep: Option<u64>) {
+		let open: Vec<u64> = self
+			.expanded
+			.iter()
+			.copied()
+			.filter(|id| Some(*id) != keep)
+			.collect();
+		for id in open {
+			self.close(id);
+		}
+	}
+	/// Applies the BetterFolders open/close rules to a change of the selected server.
+	fn follow_selection(
+		&mut self,
+		rules: &model::builtin_extensions::BetterFolders,
+		settings: Option<&Settings>,
+		selected: Option<Id>,
+	) {
+		let Some(guild) = selected else {
+			if rules.close_all_home {
+				self.close_all_except(None);
+			}
+			return;
+		};
+		let folder = settings.and_then(|settings| {
+			settings
+				.folders
+				.iter()
+				.find(|folder| folder.guild_ids.contains(&guild))
+				.and_then(|folder| folder.id)
+		});
+		match folder {
+			None if rules.close_all_folders => self.close_all_except(None),
+			None => {}
+			Some(folder) if rules.close_server_folder => self.close(folder),
+			Some(folder) if rules.force_open && !self.expanded.contains(&folder) => {
+				if rules.close_others {
+					self.close_all_except(Some(folder));
+				}
+				self.open(folder);
+			}
+			Some(_) => {}
+		}
 	}
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,6 +415,204 @@ impl MessagingUi {
 			});
 	}
 
+	/// One server icon with its selection pill, unread and voice badges; selects it on click.
+	fn rail_guild_tile(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+		id: Id,
+		call_guild: Option<Id>,
+		colors: &design::Palette,
+	) -> Option<egui::Response> {
+		let guild = state.guild(id)?;
+		let response = self
+			.avatars
+			.show_guild_rail(ui, guild, self.guild == Some(id), state.demo);
+		let (unread, count) = self.rail_cache.guild_badge(id);
+		rail_indicator(
+			ui,
+			response.id,
+			response.rect,
+			self.guild == Some(id),
+			response.hovered() || response.has_focus(),
+			unread,
+		);
+		if call_guild == Some(id) || self.rail_cache.guild_voice(id) {
+			voice_badge(ui, response.rect, call_guild == Some(id));
+		}
+		rail_badge(ui, response.id, response.rect, count, colors.base);
+		self.guild_rail_name(&response, state, guild);
+		self.preload.guild(&response, state, id);
+		if response.clicked() {
+			self.guild = Some(id);
+			if let Some(command) = state.select_guild(id) {
+				commands.push(command);
+			}
+		}
+		Some(response)
+	}
+
+	/// BetterFolders sidebar: a second column listing the servers of every open folder, with an
+	/// optional folder tile above each group that closes it. Hidden while no folder is open.
+	pub(super) fn folder_sidebar(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+	) {
+		let rules = self.builtin.better_folders;
+		let active = rules.enabled && rules.sidebar;
+		let open: Vec<(u64, Vec<Id>, u32, String)> = match &state.guild_folders {
+			Some(settings) if active => settings
+				.folders
+				.iter()
+				.filter_map(|folder| {
+					let id = folder
+						.id
+						.filter(|id| self.folder_ui.expanded.contains(id))?;
+					let guilds: Vec<Id> = folder
+						.guild_ids
+						.iter()
+						.copied()
+						.filter(|g| state.guild(*g).is_some())
+						.collect();
+					(!guilds.is_empty()).then(|| {
+						(
+							id,
+							guilds,
+							folder.color.unwrap_or(design::DEFAULT_PRIMARY_RGB),
+							folder.name.clone().unwrap_or_default(),
+						)
+					})
+				})
+				.take(model::guild_folders::MAX_FOLDERS)
+				.collect(),
+			_ => Vec::new(),
+		};
+		let shown = if rules.sidebar_anim {
+			ui.ctx().animate_bool_with_time(
+				ui.scope_id().with("better-folders-sidebar"),
+				!open.is_empty(),
+				rail_motion(ui) * 0.6,
+			)
+		} else if open.is_empty() {
+			0.0
+		} else {
+			1.0
+		};
+		if shown <= 0.0 {
+			return;
+		}
+		let width = (crate::notifications::RAIL_WIDTH * shown).round();
+		let margin = ((crate::notifications::RAIL_WIDTH - RAIL_TILE) / 2.0) as i8;
+		let call_guild = state.voice.active.as_ref().and_then(|call| call.guild);
+		let icons = match rules.show_folder_icon {
+			model::builtin_extensions::BetterFolders::ICON_ALWAYS => true,
+			model::builtin_extensions::BetterFolders::ICON_WHEN_SEVERAL => open.len() > 1,
+			_ => false,
+		};
+		let mut close = None;
+		egui::Panel::left("better-folders-sidebar")
+			.resizable(false)
+			.exact_size(width)
+			.show_separator_line(false)
+			.frame(
+				egui::Frame::new()
+					.fill(design::section_surface(
+						ui,
+						design::window_palette(ui).base,
+						design::ImageSection::ServerList,
+					))
+					.inner_margin(egui::Margin {
+						left: margin,
+						right: margin,
+						top: 4,
+						bottom: 8,
+					}),
+			)
+			.show(ui, |ui| {
+				ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
+				ui.multiply_opacity(shown);
+				let colors = design::palette(ui);
+				egui::ScrollArea::vertical()
+					.id_salt("better-folders-sidebar-scroll")
+					.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+					.show(ui, |ui| {
+						ui.spacing_mut().item_spacing.y = 8.0;
+						for (index, (folder, guilds, rgb, name)) in open.iter().enumerate() {
+							if index > 0 {
+								let (line, _) = ui.allocate_exact_size(
+									egui::vec2(RAIL_TILE, 2.0),
+									Sense::hover(),
+								);
+								ui.painter().rect_filled(
+									egui::Rect::from_center_size(
+										line.center(),
+										egui::vec2(27.0, 2.0),
+									),
+									1,
+									colors.raised,
+								);
+							}
+							ui.push_id(("better-folder", *folder), |ui| {
+								if icons {
+									let tint = Color32::from_rgb(
+										(rgb >> 16) as u8,
+										(rgb >> 8) as u8,
+										*rgb as u8,
+									);
+									let (rect, response) = ui.allocate_exact_size(
+										egui::Vec2::splat(RAIL_TILE),
+										Sense::click(),
+									);
+									if response.hovered() {
+										ui.painter().rect_filled(rect, 12, colors.raised);
+									}
+									icons::paint(
+										ui.painter(),
+										Icon::FolderOpen,
+										rect.shrink(11.0),
+										tint,
+									);
+									let label = if name.is_empty() {
+										crate::i18n::translate(
+											"builtin-better-folders-close-folder",
+										)
+									} else {
+										format!(
+											"{name} · {}",
+											crate::i18n::translate(
+												"builtin-better-folders-close-folder"
+											)
+										)
+									};
+									design::rail_name(&response, &label);
+									if response.clicked() {
+										close = Some(*folder);
+									}
+								}
+								for guild in guilds {
+									ui.push_id(guild.0, |ui| {
+										self.rail_guild_tile(
+											ui, state, commands, *guild, call_guild, &colors,
+										);
+									});
+								}
+							});
+						}
+					});
+			});
+		if let Some(folder) = close {
+			self.folder_ui.close(folder);
+			self.save_expanded_folders();
+		}
+	}
+
+	fn save_expanded_folders(&mut self) {
+		self.expanded_folders = self.folder_ui.expanded.iter().copied().take(256).collect();
+	}
+
 	pub(super) fn server_folders(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -366,6 +625,20 @@ impl MessagingUi {
 				expanded: self.expanded_folders.iter().copied().collect(),
 				..Default::default()
 			};
+		}
+		let rules = self.builtin.better_folders;
+		let sidebar = rules.enabled && rules.sidebar && !rules.keep_icons;
+		if self.folder_ui.sidebar != sidebar {
+			self.folder_ui.sidebar = sidebar;
+			self.folder_ui.key = None;
+		}
+		if self.folder_ui.last_guild != Some(self.guild) {
+			if rules.enabled && self.folder_ui.last_guild.is_some() {
+				self.folder_ui
+					.follow_selection(&rules, state.guild_folders.as_ref(), self.guild);
+				self.save_expanded_folders();
+			}
+			self.folder_ui.last_guild = Some(self.guild);
 		}
 		// A change reported by Discord also retries after an earlier failure.
 		if (state.folders_stale || (state.guild_folders.is_none() && state.folders_error.is_none()))
@@ -468,36 +741,11 @@ impl MessagingUi {
 					}
 					let response = match item {
 						Item::Server(id) => {
-							let Some(guild) = state.guild(id) else {
+							let Some(response) =
+								self.rail_guild_tile(ui, state, commands, id, call_guild, &colors)
+							else {
 								return;
 							};
-							let response = self.avatars.show_guild_rail(
-								ui,
-								guild,
-								self.guild == Some(id),
-								state.demo,
-							);
-							let (unread, count) = self.rail_cache.guild_badge(id);
-							rail_indicator(
-								ui,
-								response.id,
-								response.rect,
-								self.guild == Some(id),
-								response.hovered() || response.has_focus(),
-								unread,
-							);
-							if call_guild == Some(id) || self.rail_cache.guild_voice(id) {
-								voice_badge(ui, response.rect, call_guild == Some(id));
-							}
-							rail_badge(ui, response.id, response.rect, count, colors.base);
-							self.guild_rail_name(&response, state, guild);
-							self.preload.guild(&response, state, id);
-							if response.clicked() {
-								self.guild = Some(id);
-								if let Some(command) = state.select_guild(id) {
-									commands.push(command);
-								}
-							}
 							response
 						}
 						Item::Folder(id) => {
@@ -604,9 +852,11 @@ impl MessagingUi {
 								)
 							});
 							if response.clicked() {
+								if rules.enabled && rules.close_others && !open {
+									self.folder_ui.close_all_except(Some(id));
+								}
 								self.folder_ui.toggle(id);
-								self.expanded_folders =
-									self.folder_ui.expanded.iter().copied().take(256).collect();
+								self.save_expanded_folders();
 							}
 							design::rail_name(
 								&response,
@@ -972,6 +1222,59 @@ impl MessagingUi {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn better_folders_rules_open_and_close_folders_on_selection_changes() {
+		use model::builtin_extensions::BetterFolders;
+		let folder = |id: u64, guilds: &[u64]| Folder {
+			id: Some(id),
+			name: None,
+			color: None,
+			guild_ids: guilds.iter().map(|g| Id(*g)).collect(),
+		};
+		let settings = Settings {
+			folders: vec![folder(1, &[10, 11]), folder(2, &[20]), standalone(Id(30))],
+			..Default::default()
+		};
+		let mut ui = FolderUi::default();
+		let rules = BetterFolders {
+			enabled: true,
+			force_open: true,
+			close_others: true,
+			close_all_folders: true,
+			close_all_home: true,
+			..Default::default()
+		};
+		ui.open(2);
+		ui.follow_selection(&rules, Some(&settings), Some(Id(11)));
+		assert_eq!(
+			ui.expanded.iter().copied().collect::<Vec<_>>(),
+			[1],
+			"force open + close others"
+		);
+		ui.follow_selection(&rules, Some(&settings), Some(Id(30)));
+		assert!(ui.expanded.is_empty(), "server outside folders closes all");
+		ui.open(1);
+		ui.follow_selection(&rules, Some(&settings), None);
+		assert!(ui.expanded.is_empty(), "Home closes all");
+		let close_own = BetterFolders {
+			enabled: true,
+			close_server_folder: true,
+			..Default::default()
+		};
+		ui.open(1);
+		ui.open(2);
+		ui.follow_selection(&close_own, Some(&settings), Some(Id(10)));
+		assert_eq!(ui.expanded.iter().copied().collect::<Vec<_>>(), [2]);
+		// Default rules change nothing.
+		let idle = BetterFolders {
+			enabled: true,
+			..Default::default()
+		};
+		ui.follow_selection(&idle, Some(&settings), Some(Id(30)));
+		ui.follow_selection(&idle, Some(&settings), None);
+		assert_eq!(ui.expanded.iter().copied().collect::<Vec<_>>(), [2]);
+	}
 	use client_core::read_state::Event as ReadEvent;
 	use model::{Channel, permissions as perms};
 

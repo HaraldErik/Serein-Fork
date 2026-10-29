@@ -313,6 +313,7 @@ fn main() -> eframe::Result {
 					position: 1,
 					hoist: false,
 					bits: 0,
+					managed: false,
 				},
 			}),
 		});
@@ -1657,6 +1658,7 @@ impl Desktop {
 							tertiary_color: None,
 							position: 2,
 							hoist: true,
+							managed: false,
 						},
 						model::permissions::Role {
 							id: model::Id(9002),
@@ -1667,6 +1669,7 @@ impl Desktop {
 							tertiary_color: gradient_roles.then_some(16761760),
 							position: 1,
 							hoist: true,
+							managed: false,
 						},
 					]);
 				}
@@ -1936,6 +1939,14 @@ impl Desktop {
 			}) {
 			// `--demo-theme-maker` or `--demo-theme-maker=advanced`.
 			messaging.preview_theme_maker(&tab);
+		}
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-better-folders") {
+			// BetterFolders with its sidebar and the fixture folder open, for screenshots.
+			messaging.builtin.better_folders.enabled = true;
+			messaging.builtin.better_folders.sidebar = true;
+			messaging.builtin.better_folders.sidebar_anim = false;
+			messaging.expanded_folders = vec![1];
 		}
 		#[cfg(feature = "demo")]
 		if demo
