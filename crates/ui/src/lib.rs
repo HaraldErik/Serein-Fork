@@ -4361,6 +4361,8 @@ impl MessagingUi {
 	}
 
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		self.profile.always_full = self.builtin.always_expand_profiles.enabled;
+		self.profile.expand_roles = self.builtin.always_expand_roles.enabled;
 		self.avatars.cosmetics = self.cosmetics;
 		name_styles::set_enabled(self.cosmetics.name_styles);
 		let cosmetics_refresh = state.set_profile_cosmetics(self.cosmetics);

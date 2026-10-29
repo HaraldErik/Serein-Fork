@@ -1988,6 +1988,7 @@ fn role_chips(
 	state: &State,
 	user: Id,
 	guild: &model::GuildProfile,
+	expand_all: bool,
 ) {
 	let Some(roles) = state.guild_roles(guild.guild) else {
 		return;
@@ -2014,7 +2015,8 @@ fn role_chips(
 		})
 		.collect();
 	let expanded_id = ui.make_persistent_id(("profile-roles-expanded", guild.guild, user));
-	let expanded = ui.data(|data| data.get_temp::<bool>(expanded_id).unwrap_or(false));
+	let expanded =
+		expand_all || ui.data(|data| data.get_temp::<bool>(expanded_id).unwrap_or(false));
 	let fits = |widths: &[f32]| {
 		let mut rows = 1;
 		let mut used = 0.0;
@@ -2492,6 +2494,10 @@ pub struct ProfileSession {
 	hovered: Option<(Id, bool)>,
 	/// Badge customize menu and directory over the open card.
 	badges: crate::badges::BadgePanels,
+	/// Always Expand Profiles built-in extension: clicks open the full profile directly.
+	pub(crate) always_full: bool,
+	/// Always Expand Roles built-in extension: the role list starts fully expanded.
+	pub(crate) expand_roles: bool,
 }
 
 pub enum ProfileEffect {
@@ -2613,12 +2619,12 @@ impl ProfileSession {
 			self.pending.push(ProfileEffect::ClearCore);
 		}
 		self.reset_card_input();
-		self.full = false;
+		self.full = self.always_full;
 		self.open = Some(user.clone());
 	}
 
 	pub fn command_open(&mut self, user: User) {
-		self.full = false;
+		self.full = self.always_full;
 		if self.open.as_ref().is_none_or(|open| open.id != user.id) {
 			self.badges.close();
 			self.reset_card_input();
@@ -3785,7 +3791,14 @@ pub fn show_with_session(
 											"profiles-show-roles",
 											full,
 										);
-										role_chips(ui, &theme, state, data.user.id, guild);
+										role_chips(
+											ui,
+											&theme,
+											state,
+											data.user.id,
+											guild,
+											session.expand_roles,
+										);
 									}
 									if !data.private {
 										section(

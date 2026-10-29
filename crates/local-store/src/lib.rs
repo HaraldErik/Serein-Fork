@@ -2139,6 +2139,10 @@ mod tests {
 		invalid.builtin_extensions.volume_booster.max_percent = 300;
 		invalid.builtin_extensions.send_timestamps.style = 'x';
 		assert!(!invalid.is_valid());
+		invalid.builtin_extensions.send_timestamps.style = 't';
+		invalid.builtin_extensions.better_folders.show_folder_icon = 3;
+		assert!(!invalid.is_valid());
+		assert!(!builtin.better_folders.enabled && builtin.better_folders.sidebar);
 	}
 
 	#[test]

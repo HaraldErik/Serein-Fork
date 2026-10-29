@@ -463,6 +463,7 @@ impl MessagingUi {
 						}
 					});
 			});
+		self.folder_sidebar(ui, state, commands);
 		if let Some(id) = selected
 			&& let Some(command) = state.select(id)
 		{

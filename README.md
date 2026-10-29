@@ -53,6 +53,15 @@ Built-in extensions are **off by default**; turn on the ones you want. Built-in 
 | ClearURLs | ClearURLs | Site-specific rules; also apply to edits |
 | Send Timestamps | SendTimestamps | Timestamp style; also apply to edits |
 | Silent Message Toggle | SilentMessageToggle | Turn off after sending. Red bell beside Send while on; silent messages show a bell-with-z by their time |
+| Always Expand Profiles | AlwaysExpandProfiles | (none) Opens the full profile instead of the popout |
+| Always Expand Roles | AlwaysExpandRoles | (none) Shows every role on profiles |
+| Better Folders | BetterFolders | Sidebar, sidebar animation, close all / on Home / others / server folder, force open, keep icons, folder icon (never / always / several open) |
+
+**Written from scratch.** These extensions are *not* ports of Equicord or Vencord code; none of their
+source is copied or translated. Each one is an independent Rust implementation for Serein's native
+UI, written only from the original plugin's public description and settings (what it does, not how).
+The Equicord names are kept so you can recognise the feature. Equicord/Vencord are GPL-3.0 projects;
+this fork is MIT OR Apache-2.0 and contains no code from them.
 
 When a built-in extension's job becomes possible through the plugin API, move it to a plugin.
 All work on plugins and built-in extensions happens on the single long-lived **`plugins`** branch

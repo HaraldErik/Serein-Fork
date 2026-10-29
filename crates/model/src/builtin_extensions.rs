@@ -12,6 +12,9 @@ pub struct BuiltinExtensions {
 	pub clear_urls: ClearUrls,
 	pub send_timestamps: SendTimestamps,
 	pub silent_toggle: SilentToggle,
+	pub always_expand_profiles: Toggle,
+	pub always_expand_roles: Toggle,
+	pub better_folders: BetterFolders,
 }
 
 impl BuiltinExtensions {
@@ -19,6 +22,7 @@ impl BuiltinExtensions {
 		(VolumeBooster::MIN_CEILING..=VolumeBooster::MAX_CEILING)
 			.contains(&self.volume_booster.max_percent)
 			&& SendTimestamps::STYLES.contains(&self.send_timestamps.style)
+			&& self.better_folders.show_folder_icon <= BetterFolders::ICON_WHEN_SEVERAL
 	}
 }
 
@@ -117,6 +121,61 @@ impl Default for SilentToggle {
 		Self {
 			enabled: false,
 			auto_disable: true,
+		}
+	}
+}
+
+/// A built-in extension with no options beyond on/off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Toggle {
+	pub enabled: bool,
+}
+
+/// BetterFolders: open server folders in their own sidebar and control when folders open and close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BetterFolders {
+	pub enabled: bool,
+	/// Show an open folder's servers in a separate column beside the server list.
+	pub sidebar: bool,
+	/// Slide that column in and out.
+	pub sidebar_anim: bool,
+	/// Close every folder when a server outside any folder is selected.
+	pub close_all_folders: bool,
+	/// Close every folder when Home is clicked.
+	pub close_all_home: bool,
+	/// Opening a folder closes the others.
+	pub close_others: bool,
+	/// Selecting a server inside a folder closes that folder.
+	pub close_server_folder: bool,
+	/// Switching to a server inside a closed folder opens it.
+	pub force_open: bool,
+	/// With the sidebar, keep listing the servers under the open folder in the main list too.
+	pub keep_icons: bool,
+	/// Folder tile above its servers in the sidebar: never, always, or with several folders open.
+	pub show_folder_icon: u8,
+}
+
+impl BetterFolders {
+	pub const ICON_NEVER: u8 = 0;
+	pub const ICON_ALWAYS: u8 = 1;
+	pub const ICON_WHEN_SEVERAL: u8 = 2;
+}
+
+impl Default for BetterFolders {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			sidebar: true,
+			sidebar_anim: true,
+			close_all_folders: false,
+			close_all_home: false,
+			close_others: false,
+			close_server_folder: false,
+			force_open: false,
+			keep_icons: false,
+			show_folder_icon: Self::ICON_ALWAYS,
 		}
 	}
 }

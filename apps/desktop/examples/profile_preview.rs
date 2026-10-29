@@ -343,6 +343,7 @@ fn prime_channel_links(state: &mut client_core::State) {
 				tertiary_color: None,
 				position: 1,
 				hoist: false,
+				managed: false,
 			},
 		}),
 	});

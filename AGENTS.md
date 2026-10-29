@@ -38,6 +38,9 @@ Settings → Extensions:
   `model::BuiltinExtensions` (`crates/model/src/builtin_extensions.rs`, with serde defaults and
   `is_valid` bounds). Feature code reads its on/off and options only from there.
 - Built-in extensions default to **off**; the user opts in on the Extensions page.
+- **Clean-room only.** Re-implement Equicord/Vencord features from their public description,
+  README and settings UI. Never read, copy or translate their source (GPL-3.0; this fork is
+  MIT OR Apache-2.0). Say so in the PR.
 - **Never** add a feature's toggle or options to ordinary settings pages (`settings.rs` Chat,
   Voice, Appearance…), and never ship a feature that cannot be turned off.
 - Work on extensions and plugins goes on the one long-lived `plugins` branch; do not create a
